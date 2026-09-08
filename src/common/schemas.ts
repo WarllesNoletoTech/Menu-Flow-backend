@@ -1,0 +1,34 @@
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { HydratedDocument, Types } from 'mongoose';
+import { Role } from './roles';
+
+@Schema({ timestamps: true }) export class Restaurant { @Prop({ required: true, trim: true }) name!: string; @Prop({ required: true, unique: true, lowercase: true, trim: true }) slug!: string; @Prop() logoUrl?: string; @Prop() bannerUrl?: string; @Prop() description?: string; @Prop() phone?: string; @Prop() whatsapp?: string; @Prop() instagram?: string; @Prop({ default: false }) blocked!: boolean; @Prop({ default: true }) open!: boolean; }
+export type RestaurantDocument = HydratedDocument<Restaurant>; export const RestaurantSchema = SchemaFactory.createForClass(Restaurant);
+
+@Schema({ timestamps: true }) export class User { @Prop({ required: true, lowercase: true, unique: true }) email!: string; @Prop({ required: true, select: false }) passwordHash!: string; @Prop({ required: true }) name!: string; @Prop({ enum: Role, required: true }) role!: Role; @Prop({ type: Types.ObjectId, ref: 'Restaurant' }) restaurantId?: Types.ObjectId; @Prop({ default: true }) active!: boolean; }
+export type UserDocument = HydratedDocument<User>; export const UserSchema = SchemaFactory.createForClass(User);
+
+@Schema({ timestamps: true }) export class Category { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true }) name!: string; @Prop({ default: 0 }) order!: number; @Prop({ default: true }) active!: boolean; }
+export const CategorySchema = SchemaFactory.createForClass(Category); CategorySchema.index({ restaurantId: 1, order: 1 });
+
+@Schema({ _id: false }) export class Addon { @Prop({ required: true }) name!: string; @Prop({ required: true, min: 0 }) price!: number; }
+@Schema({ _id: false }) export class AddonGroup { @Prop({ required: true }) name!: string; @Prop({ default: false }) required!: boolean; @Prop({ default: 0 }) min!: number; @Prop({ default: 1 }) max!: number; @Prop({ type: [Addon], default: [] }) addons!: Addon[]; }
+@Schema({ timestamps: true }) export class Product { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ type: Types.ObjectId, ref: 'Category', required: true }) categoryId!: Types.ObjectId; @Prop({ required: true }) name!: string; @Prop() description?: string; @Prop() imageUrl?: string; @Prop({ required: true, min: 0 }) price!: number; @Prop({ min: 0 }) promotionalPrice?: number; @Prop({ default: true }) available!: boolean; @Prop({ default: false }) featured!: boolean; @Prop({ default: 0 }) order!: number; @Prop({ type: [AddonGroup], default: [] }) addonGroups!: AddonGroup[]; }
+export const ProductSchema = SchemaFactory.createForClass(Product); ProductSchema.index({ restaurantId: 1, categoryId: 1, order: 1 });
+
+@Schema({ _id: false }) export class OrderItem { @Prop({ required: true }) productName!: string; @Prop({ required: true }) unitPrice!: number; @Prop({ required: true }) quantity!: number; @Prop({ type: [Object], default: [] }) addons!: Array<{ name: string; price: number }>; @Prop() observation?: string; }
+@Schema({ timestamps: true }) export class Order { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true }) customerName!: string; @Prop({ required: true }) phone!: string; @Prop({ enum: ['DELIVERY', 'PICKUP'], required: true }) fulfillment!: string; @Prop({ type: Object }) address?: Record<string, string>; @Prop({ required: true }) paymentMethod!: string; @Prop() changeFor?: number; @Prop({ type: [OrderItem], required: true }) items!: OrderItem[]; @Prop({ required: true }) subtotal!: number; @Prop({ default: 0 }) deliveryFee!: number; @Prop({ default: 0 }) discount!: number; @Prop({ required: true }) total!: number; @Prop({ enum: ['NEW', 'ACCEPTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED'], default: 'NEW' }) status!: string; }
+export const OrderSchema = SchemaFactory.createForClass(Order); OrderSchema.index({ restaurantId: 1, createdAt: -1 });
+
+// Supporting tenant-owned models. Keep these separate as the platform grows, but retain
+// restaurantId on every queryable record to make accidental cross-tenant reads difficult.
+@Schema({ timestamps: true }) export class Customer { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true }) name!: string; @Prop({ required: true }) phone!: string; @Prop({ type: [Object], default: [] }) addresses!: Array<Record<string, string>>; @Prop({ default: 0 }) totalSpent!: number; @Prop({ default: 0 }) orderCount!: number; @Prop() lastOrderAt?: Date; }
+export const CustomerSchema = SchemaFactory.createForClass(Customer); CustomerSchema.index({ restaurantId: 1, phone: 1 }, { unique: true });
+@Schema({ timestamps: true }) export class Coupon { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true, uppercase: true, trim: true }) code!: string; @Prop({ enum: ['FIXED', 'PERCENTAGE'], required: true }) type!: string; @Prop({ required: true }) value!: number; @Prop({ default: 0 }) minimumOrder!: number; @Prop() startsAt?: Date; @Prop() endsAt?: Date; @Prop() usageLimit?: number; @Prop({ default: 0 }) usageCount!: number; @Prop({ default: true }) active!: boolean; }
+export const CouponSchema = SchemaFactory.createForClass(Coupon); CouponSchema.index({ restaurantId: 1, code: 1 }, { unique: true });
+@Schema({ timestamps: true }) export class DeliveryZone { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true }) name!: string; @Prop({ required: true, min: 0 }) fee!: number; @Prop({ default: true }) active!: boolean; }
+export const DeliveryZoneSchema = SchemaFactory.createForClass(DeliveryZone);
+@Schema({ timestamps: true }) export class Payment { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true }) name!: string; @Prop({ enum: ['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD'], required: true }) method!: string; @Prop({ default: true }) active!: boolean; }
+export const PaymentSchema = SchemaFactory.createForClass(Payment);
+@Schema({ timestamps: true }) export class RestaurantSettings { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, unique: true }) restaurantId!: Types.ObjectId; @Prop({ type: Object, default: {} }) openingHours!: Record<string, unknown>; @Prop({ default: 0, min: 0 }) minimumOrder!: number; @Prop({ min: 0 }) preparationMinutes?: number; @Prop({ default: false }) rappidexEnabled!: boolean; }
+export const RestaurantSettingsSchema = SchemaFactory.createForClass(RestaurantSettings);

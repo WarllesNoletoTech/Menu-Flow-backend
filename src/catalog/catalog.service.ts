@@ -1,0 +1,11 @@
+import { Injectable, NotFoundException } from '@nestjs/common'; import { InjectModel } from '@nestjs/mongoose'; import { Model, Types } from 'mongoose'; import { Category, Product } from '../common/schemas';
+@Injectable() export class CatalogService {
+  constructor(@InjectModel(Category.name) private readonly categories: Model<Category>, @InjectModel(Product.name) private readonly products: Model<Product>) {}
+  categoriesFor(restaurantId: string) { return this.categories.find({ restaurantId, active: true }).sort({ order: 1 }).lean(); }
+  productsFor(restaurantId: string) { return this.products.find({ restaurantId, available: true }).sort({ order: 1 }).lean(); }
+  async publicMenu(restaurantId: string) { const [categories, products] = await Promise.all([this.categoriesFor(restaurantId), this.productsFor(restaurantId)]); return { categories, products }; }
+  createCategory(restaurantId: string, input: { name: string; order?: number }) { return this.categories.create({ ...input, restaurantId: new Types.ObjectId(restaurantId) }); }
+  async updateCategory(restaurantId: string, id: string, input: Partial<Category>) { const category = await this.categories.findOneAndUpdate({ _id: id, restaurantId }, input, { new: true, runValidators: true }); if (!category) throw new NotFoundException('Category not found'); return category; }
+  async createProduct(restaurantId: string, input: { categoryId: string; name: string; price: number; description?: string; imageUrl?: string; promotionalPrice?: number; available?: boolean; featured?: boolean; order?: number }) { const category = await this.categories.exists({ _id: input.categoryId, restaurantId }); if (!category) throw new NotFoundException('Category not found'); return this.products.create({ ...input, restaurantId: new Types.ObjectId(restaurantId) }); }
+  async updateProduct(restaurantId: string, id: string, input: Partial<Product>) { if (input.categoryId && !(await this.categories.exists({ _id: input.categoryId, restaurantId }))) throw new NotFoundException('Category not found'); const product = await this.products.findOneAndUpdate({ _id: id, restaurantId }, input, { new: true, runValidators: true }); if (!product) throw new NotFoundException('Product not found'); return product; }
+}

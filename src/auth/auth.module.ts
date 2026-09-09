@@ -17,6 +17,8 @@ import { OptionalJwtGuard } from './optional-jwt.guard';
       signOptions: { expiresIn: (config.get<string>('JWT_EXPIRES_IN') ?? '1d') as SignOptions['expiresIn'] },
     }) }),
   ],
-  controllers: [AuthController], providers: [AuthService, JwtGuard, OptionalJwtGuard], exports: [AuthService, JwtGuard, OptionalJwtGuard],
+  controllers: [AuthController],
+  providers: [AuthService, JwtGuard, OptionalJwtGuard],
+  exports: [AuthService, JwtGuard, OptionalJwtGuard, MongooseModule],
 })
 export class AuthModule {}

@@ -109,6 +109,8 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Order not found');
     if (!transitions[order.status]?.includes(status)) throw new BadRequestException('Invalid status transition');
     order.status = status;
+    if (status === 'COMPLETED' && !order.completedAt) order.completedAt = new Date();
+    if (status === 'CANCELLED' && !order.cancelledAt) order.cancelledAt = new Date();
     await order.save();
     this.gateway.publishOrderUpdated(restaurantId, order.toJSON());
     return order;

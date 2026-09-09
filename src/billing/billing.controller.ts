@@ -1,0 +1,12 @@
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { IsArray, IsBoolean, IsIn, IsInt, IsMongoId, IsOptional, IsString, Matches, Max, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { JwtGuard } from '../auth/jwt.guard'; import { Role } from '../common/roles'; import { Roles,RolesGuard } from '../common/roles.guard'; import { BillingInvoiceStatus } from '../common/schemas'; import { BillingService } from './billing.service';
+class TierDto{@IsInt()@Min(0)minOrders!:number;@IsOptional()@IsInt()@Min(0)maxOrders!:number|null;@IsInt()@Min(0)amountCents!:number}
+class PlanDto{@IsString()name!:string;@IsOptional()@IsBoolean()active?:boolean;@IsOptional()@IsBoolean()isDefault?:boolean;@IsOptional()@IsInt()@Min(1)@Max(28)dueDay?:number;@IsArray()@ValidateNested({each:true})@Type(()=>TierDto)tiers!:TierDto[]}
+class GenerateDto{@Matches(/^\d{4}-(0[1-9]|1[0-2])$/)period!:string} class StatusDto{@IsIn(['PAID','WAIVED','CANCELLED'])status!:BillingInvoiceStatus}
+@Controller('billing') @UseGuards(JwtGuard,RolesGuard) export class BillingController{constructor(private billing:BillingService){}
+ @Get('dashboard')@Roles(Role.SUPER_ADMIN)dashboard(){return this.billing.dashboard()} @Get('plans')@Roles(Role.SUPER_ADMIN)plans(){return this.billing.listPlans()} @Post('plans')@Roles(Role.SUPER_ADMIN)create(@Body()b:PlanDto){return this.billing.createPlan(b)} @Patch('plans/:id')@Roles(Role.SUPER_ADMIN)update(@Param('id')id:string,@Body()b:Partial<PlanDto>){return this.billing.updatePlan(id,b as any)}
+ @Patch('restaurants/:id')@Roles(Role.SUPER_ADMIN)assign(@Param('id')id:string,@Body()b:{billingPlanId?:string;billingStartAt?:string;billingDueDay?:number}){return this.billing.assignRestaurant(id,b)}
+ @Post('invoices/generate')@Roles(Role.SUPER_ADMIN)generate(@Body()b:GenerateDto){return this.billing.generate(b.period)} @Get('invoices')@Roles(Role.SUPER_ADMIN)list(@Query('page')p='1',@Query('limit')l='20',@Query('status')s?:string){return this.billing.listInvoices(+p,Math.min(100,+l),s)} @Get('invoices/:id')@Roles(Role.SUPER_ADMIN)invoice(@Param('id')id:string){return this.billing.invoice(id)} @Patch('invoices/:id/status')@Roles(Role.SUPER_ADMIN)setStatus(@Param('id')id:string,@Body()b:StatusDto,@Req()r:{user:{sub:string}}){return this.billing.setStatus(id,b.status,r.user.sub)}
+ @Get('me')@Roles(Role.RESTAURANT_ADMIN)merchant(@Req()r:{user:{restaurantId:string}},@Query('period')p:string){return this.billing.merchant(r.user.restaurantId,p)} }

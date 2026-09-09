@@ -16,8 +16,12 @@ function validateEnvironment(environment: Record<string, unknown>) {
     }
   }
 
+  if (environment.NODE_ENV === 'production' && (typeof environment.FRONTEND_URL !== 'string' || environment.FRONTEND_URL.trim() === '')) {
+    throw new Error('FRONTEND_URL must be configured in production to restrict CORS.');
+  }
+
   return environment;
 }
 
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnvironment }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ uri: config.getOrThrow<string>('MONGODB_URI'), serverSelectionTimeoutMS: 10000 }) }), AuthModule, RestaurantsModule, CatalogModule, OrdersModule, UsersModule, CustomersModule] })
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnvironment }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ uri: config.getOrThrow<string>('MONGODB_URI'), serverSelectionTimeoutMS: 10000, retryAttempts: 5, retryDelay: 1000 }) }), AuthModule, RestaurantsModule, CatalogModule, OrdersModule, UsersModule, CustomersModule] })
 export class AppModule {}

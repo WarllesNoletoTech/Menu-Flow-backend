@@ -2,9 +2,10 @@ import { JwtService } from '@nestjs/jwt';
 import { WebSocketGateway, WebSocketServer, OnGatewayConnection } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Role } from '../common/roles';
+import { corsOptions } from '../common/cors';
 
 /** Restaurant rooms prevent order events leaking across tenants. */
-@WebSocketGateway({ cors: { origin: process.env.FRONTEND_URL?.split(',') ?? true } })
+@WebSocketGateway({ cors: corsOptions() })
 export class OrdersGateway implements OnGatewayConnection {
   constructor(private readonly jwt: JwtService) {}
   @WebSocketServer() server!: Server;

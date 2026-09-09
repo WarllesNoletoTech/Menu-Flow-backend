@@ -16,7 +16,16 @@ export class CatalogService {
   createCategory(restaurantId: string, input: { name: string; order?: number; active?: boolean }) { return this.categories.create({ ...input, restaurantId: new Types.ObjectId(restaurantId) }); }
   async updateCategory(restaurantId: string, id: string, input: Partial<Category>) { const category = await this.categories.findOneAndUpdate({ _id: id, restaurantId }, input, { new: true, runValidators: true }); if (!category) throw new NotFoundException('Category not found'); return category; }
   async createProduct(restaurantId: string, input: ProductInput) { await this.ensureProductInput(restaurantId, input); return this.products.create({ ...input, restaurantId: new Types.ObjectId(restaurantId) }); }
-  async updateProduct(restaurantId: string, id: string, input: ProductUpdateInput) { await this.ensureProductInput(restaurantId, input); const product = await this.products.findOneAndUpdate({ _id: id, restaurantId }, input, { new: true, runValidators: true }); if (!product) throw new NotFoundException('Product not found'); return product; }
+  async updateProduct(restaurantId: string, id: string, input: ProductUpdateInput) {
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Product not found');
+    const existing = await this.products.findOne({ _id: id, restaurantId }).lean();
+    if (!existing) throw new NotFoundException('Product not found');
+    await this.ensureProductInput(restaurantId, input);
+    const effectivePrice = input.price ?? existing.price;
+    const effectivePromotionalPrice = input.promotionalPrice ?? existing.promotionalPrice;
+    if (effectivePromotionalPrice !== undefined && effectivePromotionalPrice > effectivePrice) throw new BadRequestException('Promotional price cannot exceed the regular price');
+    return this.products.findOneAndUpdate({ _id: id, restaurantId }, input, { new: true, runValidators: true });
+  }
   private async ensureProductInput(restaurantId: string, input: Partial<ProductInput>) {
     if (input.categoryId && !(await this.categories.exists({ _id: input.categoryId, restaurantId }))) throw new NotFoundException('Category not found');
     if (input.promotionalPrice !== undefined && input.price !== undefined && input.promotionalPrice > input.price) throw new BadRequestException('Promotional price cannot exceed the regular price');

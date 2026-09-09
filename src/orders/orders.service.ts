@@ -34,6 +34,9 @@ export class OrdersService {
     if (input.fulfillment === 'DELIVERY' && !input.address?.neighborhood) {
       throw new BadRequestException('Neighborhood is required for delivery');
     }
+    if (input.fulfillment === 'DELIVERY' && (!input.address?.street?.trim() || !input.address?.number?.trim())) {
+      throw new BadRequestException('Street and number are required for delivery');
+    }
     const productIds = input.items.map(({ productId }) => productId);
     if (productIds.some((id) => !Types.ObjectId.isValid(id))) throw new BadRequestException('Invalid product');
     const products = await this.products.find({ _id: { $in: productIds }, restaurantId, available: true }).lean();
@@ -79,8 +82,14 @@ export class OrdersService {
     const total = subtotal + deliveryFee - discount;
     if (input.changeFor !== undefined && input.paymentMethod !== 'CASH') throw new BadRequestException('Change is only available for cash payments');
     if (input.changeFor !== undefined && input.changeFor < total) throw new BadRequestException('Change amount must cover the order total');
-    const order = await this.orders.create({ customerName: input.customerName, phone: input.phone, fulfillment: input.fulfillment, paymentMethod: input.paymentMethod, address: input.address, changeFor: input.changeFor, restaurantId: new Types.ObjectId(restaurantId), customerId: customerId ? new Types.ObjectId(customerId) : undefined, orderNumber: `MF-${Date.now().toString(36).toUpperCase()}`, items, subtotal, deliveryFee, discount, total });
-    if (couponId) await this.coupons.updateOne({ _id: couponId, $or: [{ usageLimit: { $exists: false } }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }] }, { $inc: { usageCount: 1 } });
+    const order = await this.orders.create({ customerName: input.customerName, phone: input.phone, fulfillment: input.fulfillment, paymentMethod: input.paymentMethod, address: input.address, changeFor: input.changeFor, restaurantId: new Types.ObjectId(restaurantId), customerId: customerId ? new Types.ObjectId(customerId) : undefined, orderNumber: `MF-${new Types.ObjectId().toString().toUpperCase()}`, items, subtotal, deliveryFee, discount, total });
+    if (couponId) {
+      const couponUsed = await this.coupons.updateOne({ _id: couponId, $or: [{ usageLimit: { $exists: false } }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }] }, { $inc: { usageCount: 1 } });
+      if (couponUsed.modifiedCount !== 1) {
+        await this.orders.deleteOne({ _id: order._id });
+        throw new BadRequestException('Coupon usage limit has been reached');
+      }
+    }
     await this.customers.findOneAndUpdate(
       { restaurantId, phone: input.phone },
       { $set: { name: input.customerName, lastOrderAt: new Date() }, $addToSet: input.address ? { addresses: input.address } : {}, $inc: { orderCount: 1, totalSpent: order.total } },
@@ -95,6 +104,7 @@ export class OrdersService {
 
   async updateStatus(restaurantId: string, id: string, status: string) {
     const transitions: Record<string, string[]> = { NEW: ['ACCEPTED', 'CANCELLED'], ACCEPTED: ['PREPARING', 'CANCELLED'], PREPARING: ['READY', 'CANCELLED'], READY: ['OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED'], OUT_FOR_DELIVERY: ['COMPLETED', 'CANCELLED'], COMPLETED: [], CANCELLED: [] };
+    if (!Types.ObjectId.isValid(restaurantId) || !Types.ObjectId.isValid(id)) throw new NotFoundException('Order not found');
     const order = await this.orders.findOne({ _id: id, restaurantId });
     if (!order) throw new NotFoundException('Order not found');
     if (!transitions[order.status]?.includes(status)) throw new BadRequestException('Invalid status transition');

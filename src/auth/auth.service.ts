@@ -33,6 +33,9 @@ export class AuthService implements OnModuleInit {
     const requiresRestaurant = role === Role.RESTAURANT_ADMIN || role === Role.EMPLOYEE;
     if ((requiresRestaurant && !restaurantId) || (!requiresRestaurant && restaurantId)) throw new BadRequestException('Restaurant membership does not match the selected role');
     if (restaurantId && (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: restaurantId })))) throw new BadRequestException('Restaurant not found');
+    if (role === Role.RESTAURANT_ADMIN && await this.users.exists({ role: Role.RESTAURANT_ADMIN, restaurantId: new Types.ObjectId(restaurantId!) })) {
+      throw new ConflictException('Este estabelecimento já possui um lojista responsável.');
+    }
     if (await this.users.exists({ email })) throw new ConflictException('Email already exists');
     const user = await this.users.create({ name, email, phone, passwordHash: await bcrypt.hash(password, 12), role, restaurantId, active: true });
     return { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() };

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsEmail, IsEnum, IsNumber, IsOptional, IsString, IsUrl, Matches, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { JwtGuard } from '../auth/jwt.guard';
@@ -54,6 +54,7 @@ class UpdateWithOwnerDto { @ValidateNested() @Type(() => UpdateRestaurantDto) es
 export class RestaurantsController {
   constructor(private readonly restaurants: RestaurantsService) {}
   @Get() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) list() { return this.restaurants.list(); }
+  @Get('owner-integrity/diagnostic') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) ownerIntegrityDiagnostic() { return this.restaurants.ownerIntegrityDiagnostic(); }
   @Get('me') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   mine(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.ownerDetail(request.user.restaurantId); }
   @Get('my-context') @Roles(Role.RESTAURANT_ADMIN, Role.EMPLOYEE) @UseGuards(JwtGuard, RolesGuard)
@@ -68,6 +69,8 @@ export class RestaurantsController {
   addMyEmployee(@Req() request: { user: { restaurantId: string } }, @Body() body: EmployeeDto) { return this.restaurants.addEmployee(request.user.restaurantId, body); }
   @Patch('me/users/:userId') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   updateMyEmployee(@Req() request: { user: { restaurantId: string } }, @Param('userId') userId: string, @Body() body: UpdateStoreUserDto) { return this.restaurants.updateEmployee(request.user.restaurantId, userId, body); }
+  @Delete('me/users/:userId') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  deleteMyEmployee(@Req() request: { user: { restaurantId: string } }, @Param('userId') userId: string) { return this.restaurants.deleteEmployee(request.user.restaurantId, userId); }
   @Post() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) create(@Body() body: CreateRestaurantDto) { return this.restaurants.create(body); }
   @Post('with-admin') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) createWithOwner(@Body() body: EstablishmentWithOwnerDto) { return this.restaurants.createWithOwner(body.establishment as Required<Pick<CreateRestaurantDto, 'name' | 'slug' | 'city' | 'state' | 'establishmentType'>> & CreateRestaurantDto, body.owner); }
   @Get(':restaurantId/admin-detail') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) adminDetail(@Param('restaurantId') id: string) { return this.restaurants.adminDetail(id); }
@@ -76,6 +79,7 @@ export class RestaurantsController {
   @Post(':restaurantId/employees') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) addEmployee(@Param('restaurantId') id: string, @Body() body: EmployeeDto) { return this.restaurants.addEmployee(id, body); }
   @Get(':restaurantId/users') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) users(@Param('restaurantId') id: string) { return this.restaurants.usersForRestaurant(id); }
   @Patch(':restaurantId/users/:userId') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateUser(@Param('restaurantId') restaurantId: string, @Param('userId') userId: string, @Body() body: UpdateStoreUserDto) { return this.restaurants.updateStoreUser(restaurantId, userId, body); }
+  @Delete(':restaurantId/employees/:userId') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) deleteEmployee(@Param('restaurantId') restaurantId: string, @Param('userId') userId: string) { return this.restaurants.deleteEmployee(restaurantId, userId); }
   @Patch(':restaurantId') @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) update(@Param('restaurantId') id: string, @Body() body: UpdateRestaurantDto, @Req() request: { user: { role: Role } }) { return this.restaurants.update(id, body, request.user.role); }
   @Patch(':restaurantId/settings') @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) updateSettings(@Param('restaurantId') id: string, @Body() body: UpdateSettingsDto) { return this.restaurants.updateSettings(id, body); }
   @Get(':slug') find(@Param('slug') slug: string) { return this.restaurants.bySlug(slug); }

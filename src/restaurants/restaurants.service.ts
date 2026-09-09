@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
+import * as bcrypt from 'bcrypt';
 import { EstablishmentType, Restaurant, RestaurantDocument, RestaurantSettings, User, UserDocument } from '../common/schemas';
 import { Role } from '../common/roles';
 import { AuthService } from '../auth/auth.service';
@@ -33,6 +34,8 @@ export class RestaurantsService {
     try {
       restaurant = await this.create(input);
       const createdOwner = await this.auth.create(owner.name, email, owner.password, Role.RESTAURANT_ADMIN, restaurant.id, owner.phone);
+      const linkedOwner = await this.users.exists({ _id: createdOwner.id, role: Role.RESTAURANT_ADMIN, restaurantId: restaurant._id });
+      if (!linkedOwner) throw new BadRequestException('Não foi possível confirmar o vínculo do lojista ao estabelecimento.');
       return { establishment: publicRestaurant(restaurant), owner: createdOwner };
     } catch (error) {
       if (restaurant) await Promise.all([this.settings.deleteOne({ restaurantId: restaurant._id }), this.restaurants.deleteOne({ _id: restaurant._id })]);
@@ -47,15 +50,42 @@ export class RestaurantsService {
   async list(): Promise<Array<Record<string, unknown>>> {
     const fields = 'name slug tradeName cnpj email phone whatsapp instagram address state city description logoUrl bannerUrl establishmentType restaurantCategories open blocked';
     const restaurants = (await this.restaurants.find().select(fields).sort({ createdAt: -1 }).lean()).map(withDefaultType);
-    const owners = await this.users.find({ role: Role.RESTAURANT_ADMIN, restaurantId: { $in: restaurants.map((item) => item._id) } }).select('name email restaurantId').sort({ createdAt: 1 }).lean();
+    const owners = await this.users.find({ role: Role.RESTAURANT_ADMIN, restaurantId: { $in: restaurants.map((item) => item._id) } }).select('name email phone active restaurantId').sort({ createdAt: 1 }).lean();
     const ownerByRestaurant = new Map(owners.map((owner) => [owner.restaurantId?.toString(), ownerSummary(owner)]));
-    return restaurants.map((restaurant) => ({ ...restaurant, owner: ownerByRestaurant.get(restaurant._id.toString()) })) as Array<Record<string, unknown>>;
+    return restaurants.map((restaurant) => ({ ...restaurant, owner: ownerByRestaurant.get(restaurant._id.toString()) ?? null })) as Array<Record<string, unknown>>;
   }
 
   async addOwner(restaurantId: string, owner: { name: string; email: string; phone?: string; password: string }) {
     if (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: restaurantId }))) throw new NotFoundException('Estabelecimento não encontrado.');
+    if (await this.users.exists({ restaurantId: new Types.ObjectId(restaurantId), role: Role.RESTAURANT_ADMIN })) throw new ConflictException('Este estabelecimento já possui um lojista responsável.');
     try { return await this.auth.create(owner.name, owner.email, owner.password, Role.RESTAURANT_ADMIN, restaurantId, owner.phone); }
     catch (error) { if (error instanceof ConflictException) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.'); throw error; }
+  }
+
+  async addEmployee(restaurantId: string, employee: { name: string; email: string; phone?: string; password: string }) {
+    await this.ensureRestaurant(restaurantId);
+    try { return await this.auth.create(employee.name, employee.email, employee.password, Role.EMPLOYEE, restaurantId, employee.phone); }
+    catch (error) { if (error instanceof ConflictException) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.'); throw error; }
+  }
+
+  async updateStoreUser(restaurantId: string, userId: string, input: { name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
+    await this.ensureRestaurant(restaurantId);
+    if (!Types.ObjectId.isValid(userId)) throw new NotFoundException('Usuário não encontrado.');
+    const user = await this.users.findOne({ _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] } });
+    if (!user) throw new NotFoundException('Usuário não encontrado neste estabelecimento.');
+    const changes: Record<string, unknown> = {};
+    if (input.name !== undefined) changes.name = input.name.trim();
+    if (input.phone !== undefined) changes.phone = input.phone.trim();
+    if (input.active !== undefined) changes.active = input.active;
+    if (input.email !== undefined) {
+      const email = input.email.trim().toLowerCase();
+      if (await this.users.exists({ email, _id: { $ne: user._id } })) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.');
+      changes.email = email;
+    }
+    if (input.password) changes.passwordHash = await bcrypt.hash(input.password, 12);
+    const updated = await this.users.findOneAndUpdate({ _id: user._id, restaurantId: new Types.ObjectId(restaurantId), role: user.role }, { $set: changes }, { new: true, runValidators: true }).select('name email phone role active restaurantId').lean();
+    if (!updated) throw new NotFoundException('Usuário não encontrado.');
+    return storeUserSummary(updated);
   }
 
   async usersForRestaurant(restaurantId: string) {
@@ -102,10 +132,15 @@ export class RestaurantsService {
     const cities = await this.locations.cities(state);
     if (!cities.some((candidate) => candidate.name === city.trim())) throw new BadRequestException('A cidade não pertence ao estado selecionado.');
   }
+
+  private async ensureRestaurant(restaurantId: string) {
+    if (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: new Types.ObjectId(restaurantId) }))) throw new NotFoundException('Estabelecimento não encontrado.');
+  }
 }
 
 function publicRestaurant(restaurant: RestaurantDocument) { return { id: restaurant.id, name: restaurant.name, slug: restaurant.slug, city: restaurant.city, state: restaurant.state, establishmentType: restaurant.establishmentType }; }
-function ownerSummary(owner: { _id: Types.ObjectId; name: string; email: string }) { return { id: owner._id.toString(), name: owner.name, email: owner.email }; }
+function ownerSummary(owner: { _id: Types.ObjectId; name: string; email: string; phone?: string; active: boolean }) { return { id: owner._id.toString(), name: owner.name, email: owner.email, phone: owner.phone, active: owner.active }; }
+function storeUserSummary(user: { _id: Types.ObjectId; name: string; email: string; phone?: string; role: Role; active: boolean }) { return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, active: user.active }; }
 
 function escapeRegExp(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function withDefaultType<T extends { establishmentType?: EstablishmentType }>(item: T): T & { establishmentType: EstablishmentType } { return { ...item, establishmentType: item.establishmentType ?? EstablishmentType.RESTAURANT }; }

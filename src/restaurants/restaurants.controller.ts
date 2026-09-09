@@ -54,6 +54,18 @@ class UpdateWithOwnerDto { @ValidateNested() @Type(() => UpdateRestaurantDto) es
 export class RestaurantsController {
   constructor(private readonly restaurants: RestaurantsService) {}
   @Get() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) list() { return this.restaurants.list(); }
+  @Get('me') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  mine(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.ownerDetail(request.user.restaurantId); }
+  @Patch('me') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  updateMine(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateRestaurantDto) { return this.restaurants.update(request.user.restaurantId, body, Role.RESTAURANT_ADMIN); }
+  @Patch('me/settings') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  updateMySettings(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateSettingsDto) { return this.restaurants.updateSettings(request.user.restaurantId, body); }
+  @Get('me/users') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  myUsers(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.employeesForRestaurant(request.user.restaurantId); }
+  @Post('me/users') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  addMyEmployee(@Req() request: { user: { restaurantId: string } }, @Body() body: EmployeeDto) { return this.restaurants.addEmployee(request.user.restaurantId, body); }
+  @Patch('me/users/:userId') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  updateMyEmployee(@Req() request: { user: { restaurantId: string } }, @Param('userId') userId: string, @Body() body: UpdateStoreUserDto) { return this.restaurants.updateEmployee(request.user.restaurantId, userId, body); }
   @Post() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) create(@Body() body: CreateRestaurantDto) { return this.restaurants.create(body); }
   @Post('with-admin') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) createWithOwner(@Body() body: EstablishmentWithOwnerDto) { return this.restaurants.createWithOwner(body.establishment as Required<Pick<CreateRestaurantDto, 'name' | 'slug' | 'city' | 'state' | 'establishmentType'>> & CreateRestaurantDto, body.owner); }
   @Get(':restaurantId/admin-detail') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) adminDetail(@Param('restaurantId') id: string) { return this.restaurants.adminDetail(id); }

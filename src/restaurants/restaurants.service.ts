@@ -61,6 +61,15 @@ export class RestaurantsService {
     return { establishment: withDefaultType(establishment!), owner: summaries.find((user) => user.role === Role.RESTAURANT_ADMIN) ?? null, users: summaries };
   }
 
+  async ownerDetail(restaurantId: string) {
+    await this.ensureRestaurant(restaurantId);
+    const [establishment, settings] = await Promise.all([
+      this.restaurants.findById(restaurantId).select('-__v -blocked').lean(),
+      this.settings.findOne({ restaurantId }).select('-__v').lean(),
+    ]);
+    return { establishment: withDefaultType(establishment!), settings };
+  }
+
   async updateWithOwner(restaurantId: string, establishment: Partial<Restaurant>, owner?: { userId: string; name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
     await this.ensureRestaurant(restaurantId);
     const currentRestaurant = await this.restaurants.findById(restaurantId).lean();
@@ -139,6 +148,19 @@ export class RestaurantsService {
     return (await this.users.find({ restaurantId, role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] } }).select('name email phone role active').sort({ createdAt: 1 }).lean()).map((user) => ({ id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, active: user.active }));
   }
 
+  async employeesForRestaurant(restaurantId: string) {
+    await this.ensureRestaurant(restaurantId);
+    return (await this.users.find({ restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE }).select('name email phone role active').sort({ createdAt: 1 }).lean()).map(storeUserSummary);
+  }
+
+  async updateEmployee(restaurantId: string, userId: string, input: { name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
+    await this.ensureRestaurant(restaurantId);
+    if (!Types.ObjectId.isValid(userId)) throw new NotFoundException('Funcionário não encontrado.');
+    const user = await this.users.findOne({ _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE });
+    if (!user) throw new NotFoundException('Funcionário não encontrado neste estabelecimento.');
+    return this.applyStoreUserUpdate(user, restaurantId, input);
+  }
+
   publicCities() {
     return this.restaurants.aggregate<{ city: string; state: string; count: number; restaurants: number }>([
       { $match: { blocked: false, city: { $type: 'string', $ne: '' }, state: { $type: 'string', $ne: '' } } },
@@ -170,7 +192,7 @@ export class RestaurantsService {
 
   async bySlug(slug: string) { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state logoUrl bannerUrl description phone whatsapp instagram establishmentType restaurantCategories open').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); return withDefaultType(restaurant); }
   async ensureAcceptingOrders(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found'); const restaurant = await this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(); if (!restaurant) throw new NotFoundException('Restaurant not found'); const settings = await this.settings.findOne({ restaurantId }).lean(); return { restaurant, settings }; }
-  async update(id: string, input: Partial<Restaurant>, actorRole: Role) { if (actorRole !== Role.SUPER_ADMIN && input.blocked !== undefined) throw new ForbiddenException('Only platform administrators can change establishment blocking'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
+  async update(id: string, input: Partial<Restaurant>, actorRole: Role) { if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
   async updateSettings(id: string, input: Partial<RestaurantSettings>) { const settings = await this.settings.findOneAndUpdate({ restaurantId: id }, input, { new: true, runValidators: true }); if (!settings) throw new NotFoundException('Restaurant settings not found'); return settings; }
 
   private async validateLocation(state?: string, city?: string) {

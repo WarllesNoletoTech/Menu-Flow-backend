@@ -7,6 +7,7 @@ import { Restaurant, RestaurantSchema, User, UserSchema } from '../common/schema
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtGuard } from './jwt.guard';
+import { OptionalJwtGuard } from './optional-jwt.guard';
 
 @Module({
   imports: [
@@ -16,6 +17,6 @@ import { JwtGuard } from './jwt.guard';
       signOptions: { expiresIn: (config.get<string>('JWT_EXPIRES_IN') ?? '1d') as SignOptions['expiresIn'] },
     }) }),
   ],
-  controllers: [AuthController], providers: [AuthService, JwtGuard], exports: [AuthService],
+  controllers: [AuthController], providers: [AuthService, JwtGuard, OptionalJwtGuard], exports: [AuthService, JwtGuard, OptionalJwtGuard],
 })
 export class AuthModule {}

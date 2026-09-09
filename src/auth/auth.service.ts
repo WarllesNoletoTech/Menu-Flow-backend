@@ -28,18 +28,20 @@ export class AuthService implements OnModuleInit {
     this.logger.log('Initial SUPER_ADMIN created from development environment configuration.');
   }
   async bootstrap(name: string, email: string, password: string) { if (await this.users.exists({})) throw new ConflictException('Bootstrap is only available before the first user'); return this.create(name, email, password, Role.SUPER_ADMIN); }
-  async create(name: string, email: string, password: string, role: Role, restaurantId?: string) {
+  async create(name: string, email: string, password: string, role: Role, restaurantId?: string, phone?: string) {
     email = email.trim().toLowerCase();
-    if ((role === Role.SUPER_ADMIN && restaurantId) || (role !== Role.SUPER_ADMIN && !restaurantId)) throw new BadRequestException('Restaurant membership does not match the selected role');
+    const requiresRestaurant = role === Role.RESTAURANT_ADMIN || role === Role.EMPLOYEE;
+    if ((requiresRestaurant && !restaurantId) || (!requiresRestaurant && restaurantId)) throw new BadRequestException('Restaurant membership does not match the selected role');
     if (restaurantId && (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: restaurantId })))) throw new BadRequestException('Restaurant not found');
     if (await this.users.exists({ email })) throw new ConflictException('Email already exists');
-    const user = await this.users.create({ name, email, passwordHash: await bcrypt.hash(password, 12), role, restaurantId });
-    return { id: user.id, email: user.email, role: user.role };
+    const user = await this.users.create({ name, email, phone, passwordHash: await bcrypt.hash(password, 12), role, restaurantId });
+    return { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() };
   }
+  registerCustomer(name: string, email: string, password: string, phone: string) { return this.create(name, email, password, Role.CUSTOMER, undefined, phone); }
   async profile(id: string) {
     const user = await this.users.findById(id).lean();
     if (!user || !user.active) throw new UnauthorizedException('Invalid credentials');
-    return { id: user._id.toString(), name: user.name, role: user.role, restaurantId: user.restaurantId?.toString() };
+    return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() };
   }
-  async login(email: string, password: string) { const user = await this.users.findOne({ email: email.trim().toLowerCase() }).select('+passwordHash'); if (!user || !user.active || !(await bcrypt.compare(password, user.passwordHash))) throw new UnauthorizedException('Invalid credentials'); return { accessToken: await this.jwt.signAsync({ sub: user.id, role: user.role, restaurantId: user.restaurantId?.toString() }), user: { id: user.id, name: user.name, role: user.role, restaurantId: user.restaurantId } }; }
+  async login(email: string, password: string) { const user = await this.users.findOne({ email: email.trim().toLowerCase() }).select('+passwordHash'); if (!user || !user.active || !(await bcrypt.compare(password, user.passwordHash))) throw new UnauthorizedException('Invalid credentials'); return { accessToken: await this.jwt.signAsync({ sub: user.id, role: user.role, restaurantId: user.restaurantId?.toString() }), user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() } }; }
 }

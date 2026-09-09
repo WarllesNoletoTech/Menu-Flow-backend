@@ -23,7 +23,7 @@ export class OrdersService {
     private readonly gateway: OrdersGateway,
   ) {}
 
-  async create(restaurantId: string, input: CheckoutInput) {
+  async create(restaurantId: string, input: CheckoutInput, customerId?: string) {
     if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found');
     const [restaurant, settings] = await Promise.all([
       this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(),
@@ -79,7 +79,7 @@ export class OrdersService {
     const total = subtotal + deliveryFee - discount;
     if (input.changeFor !== undefined && input.paymentMethod !== 'CASH') throw new BadRequestException('Change is only available for cash payments');
     if (input.changeFor !== undefined && input.changeFor < total) throw new BadRequestException('Change amount must cover the order total');
-    const order = await this.orders.create({ customerName: input.customerName, phone: input.phone, fulfillment: input.fulfillment, paymentMethod: input.paymentMethod, address: input.address, changeFor: input.changeFor, restaurantId: new Types.ObjectId(restaurantId), items, subtotal, deliveryFee, discount, total });
+    const order = await this.orders.create({ customerName: input.customerName, phone: input.phone, fulfillment: input.fulfillment, paymentMethod: input.paymentMethod, address: input.address, changeFor: input.changeFor, restaurantId: new Types.ObjectId(restaurantId), customerId: customerId ? new Types.ObjectId(customerId) : undefined, orderNumber: `MF-${Date.now().toString(36).toUpperCase()}`, items, subtotal, deliveryFee, discount, total });
     if (couponId) await this.coupons.updateOne({ _id: couponId, $or: [{ usageLimit: { $exists: false } }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }] }, { $inc: { usageCount: 1 } });
     await this.customers.findOneAndUpdate(
       { restaurantId, phone: input.phone },
@@ -91,6 +91,7 @@ export class OrdersService {
   }
 
   list(restaurantId: string) { return this.orders.find({ restaurantId }).sort({ createdAt: -1 }).lean(); }
+  forCustomer(customerId: string) { return this.orders.find({ customerId }).populate('restaurantId', 'name slug').sort({ createdAt: -1 }).lean(); }
 
   async updateStatus(restaurantId: string, id: string, status: string) {
     const transitions: Record<string, string[]> = { NEW: ['ACCEPTED', 'CANCELLED'], ACCEPTED: ['PREPARING', 'CANCELLED'], PREPARING: ['READY', 'CANCELLED'], READY: ['OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED'], OUT_FOR_DELIVERY: ['COMPLETED', 'CANCELLED'], COMPLETED: [], CANCELLED: [] };

@@ -7,6 +7,7 @@ import { RestaurantsModule } from './restaurants/restaurants.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { OrdersModule } from './orders/orders.module';
 import { UsersModule } from './users/users.module';
+import { CustomersModule } from './customers/customers.module';
 
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (c: ConfigService) => ({ uri: c.getOrThrow<string>('MONGODB_URI') }) }), AuthModule, RestaurantsModule, CatalogModule, OrdersModule, UsersModule] })
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (c: ConfigService) => ({ uri: c.getOrThrow<string>('MONGODB_URI') }) }), AuthModule, RestaurantsModule, CatalogModule, OrdersModule, UsersModule, CustomersModule] })
 export class AppModule {}

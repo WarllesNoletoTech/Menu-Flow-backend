@@ -46,8 +46,9 @@ export class AuthService implements OnModuleInit {
   }
   registerCustomer(name: string, email: string, password: string, phone: string) { return this.create(name, email, password, Role.CUSTOMER, undefined, phone); }
   async profile(id: string) {
-    const user = await this.users.findById(id).lean();
+    const user = await this.users.findOne({ _id: id, $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] }).lean();
     if (!user || !user.active) throw new UnauthorizedException('Invalid credentials');
+    await this.validateMembership(user.role, user.restaurantId?.toString());
     return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() };
   }
   async updateProfile(id: string, input: { name?: string; phone?: string }) {
@@ -58,5 +59,6 @@ export class AuthService implements OnModuleInit {
     if (!user || !user.active) throw new UnauthorizedException('Invalid credentials');
     return this.profile(user.id);
   }
-  async login(email: string, password: string) { const user = await this.users.findOne({ email: email.trim().toLowerCase() }).select('+passwordHash'); if (!user || !user.active || !(await bcrypt.compare(password, user.passwordHash))) throw new UnauthorizedException('Invalid credentials'); return { accessToken: await this.jwt.signAsync({ sub: user.id, role: user.role, restaurantId: user.restaurantId?.toString() }), user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() } }; }
+  async login(email: string, password: string) { const user = await this.users.findOne({ email: email.trim().toLowerCase(), $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] }).select('+passwordHash'); if (!user || !user.active || !(await bcrypt.compare(password, user.passwordHash))) throw new UnauthorizedException('Invalid credentials'); await this.validateMembership(user.role, user.restaurantId?.toString()); return { accessToken: await this.jwt.signAsync({ sub: user.id, role: user.role, ...(user.restaurantId ? { restaurantId: user.restaurantId.toString() } : {}) }), user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() } }; }
+  private async validateMembership(role: Role, restaurantId?: string) { const membership = role === Role.RESTAURANT_ADMIN || role === Role.EMPLOYEE; if (!membership) { if (restaurantId) throw new UnauthorizedException('Invalid credentials'); return; } if (!restaurantId || !Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: new Types.ObjectId(restaurantId) }))) throw new UnauthorizedException('Invalid credentials'); }
 }

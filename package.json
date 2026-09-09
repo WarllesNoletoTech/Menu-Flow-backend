@@ -5,6 +5,7 @@
     "node": "20.x"
   },
   "scripts": {
+    "create-super-admin": "npm run build && node dist/scripts/create-super-admin.js",
     "start:dev": "nest start --watch",
     "build": "nest build",
     "lint": "tsc --noEmit",

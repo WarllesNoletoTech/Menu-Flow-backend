@@ -9,6 +9,7 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   const config = new DocumentBuilder().setTitle('Menu Flow API').setVersion('1.0').addBearerAuth().build();
   SwaggerModule.setup('api', app, SwaggerModule.createDocument(app, config));
-  await app.listen(process.env.PORT ?? 3001);
+  const port = process.env.PORT || 3000;
+  await app.listen(port, '0.0.0.0');
 }
 void bootstrap();

@@ -9,5 +9,15 @@ import { OrdersModule } from './orders/orders.module';
 import { UsersModule } from './users/users.module';
 import { CustomersModule } from './customers/customers.module';
 
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (c: ConfigService) => ({ uri: c.getOrThrow<string>('MONGODB_URI') }) }), AuthModule, RestaurantsModule, CatalogModule, OrdersModule, UsersModule, CustomersModule] })
+function validateEnvironment(environment: Record<string, unknown>) {
+  for (const variable of ['MONGODB_URI', 'JWT_SECRET']) {
+    if (typeof environment[variable] !== 'string' || environment[variable].trim() === '') {
+      throw new Error(`${variable} must be configured before starting the API.`);
+    }
+  }
+
+  return environment;
+}
+
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnvironment }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ uri: config.getOrThrow<string>('MONGODB_URI'), serverSelectionTimeoutMS: 10000 }) }), AuthModule, RestaurantsModule, CatalogModule, OrdersModule, UsersModule, CustomersModule] })
 export class AppModule {}

@@ -2,9 +2,11 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 import { Role } from './roles';
 
-@Schema({ timestamps: true }) export class Restaurant { @Prop({ required: true, trim: true }) name!: string; @Prop({ required: true, unique: true, lowercase: true, trim: true }) slug!: string; @Prop() tradeName?: string; @Prop() cnpj?: string; @Prop() email?: string; @Prop() address?: string; @Prop({ trim: true }) city?: string; @Prop({ uppercase: true, trim: true }) state?: string; @Prop() logoUrl?: string; @Prop() bannerUrl?: string; @Prop() description?: string; @Prop() phone?: string; @Prop() whatsapp?: string; @Prop() instagram?: string; @Prop({ type: [String], default: [] }) restaurantCategories!: string[]; @Prop({ default: false }) blocked!: boolean; @Prop({ default: true }) open!: boolean; }
+export enum EstablishmentType { RESTAURANT = 'RESTAURANT', PHARMACY = 'PHARMACY', CLOTHING = 'CLOTHING', OTHER = 'OTHER' }
+
+@Schema({ timestamps: true }) export class Restaurant { @Prop({ required: true, trim: true }) name!: string; @Prop({ required: true, unique: true, lowercase: true, trim: true }) slug!: string; @Prop() tradeName?: string; @Prop() cnpj?: string; @Prop() email?: string; @Prop() address?: string; @Prop({ trim: true }) city?: string; @Prop({ uppercase: true, trim: true }) state?: string; @Prop() logoUrl?: string; @Prop() bannerUrl?: string; @Prop() description?: string; @Prop() phone?: string; @Prop() whatsapp?: string; @Prop() instagram?: string; @Prop({ enum: EstablishmentType, default: EstablishmentType.RESTAURANT }) establishmentType!: EstablishmentType; @Prop({ type: [String], default: [] }) restaurantCategories!: string[]; @Prop({ default: false }) blocked!: boolean; @Prop({ default: true }) open!: boolean; }
 export type RestaurantDocument = HydratedDocument<Restaurant>; export const RestaurantSchema = SchemaFactory.createForClass(Restaurant);
-RestaurantSchema.index({ blocked: 1, city: 1, state: 1, open: 1 });
+RestaurantSchema.index({ blocked: 1, city: 1, state: 1, establishmentType: 1, open: 1 });
 
 @Schema({ _id: true }) export class CustomerAddress { @Prop({ required: true }) label!: string; @Prop({ required: true }) street!: string; @Prop({ required: true }) number!: string; @Prop({ required: true }) neighborhood!: string; @Prop({ required: true }) city!: string; @Prop({ required: true }) state!: string; @Prop({ required: true }) zipCode!: string; @Prop() complement?: string; @Prop({ default: false }) primary!: boolean; }
 export const CustomerAddressSchema = SchemaFactory.createForClass(CustomerAddress);

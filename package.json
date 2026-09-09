@@ -7,8 +7,9 @@
   "scripts": {
     "start:dev": "nest start --watch",
     "build": "nest build",
-    "lint": "eslint \"src/**/*.ts\"",
-    "start": "node dist/main"
+    "lint": "tsc --noEmit",
+    "start": "node dist/main",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

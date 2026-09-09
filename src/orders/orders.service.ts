@@ -42,12 +42,20 @@ export class OrdersService {
     const items = input.items.map((item) => {
       const product = productById.get(item.productId);
       if (!product || item.quantity < 1) throw new BadRequestException('Invalid order item');
+      const selectedNames = item.addonNames ?? [];
+      if (new Set(selectedNames).size !== selectedNames.length) throw new BadRequestException('An add-on can only be selected once');
       const allowed = new Map(product.addonGroups.flatMap((group) => group.addons.map((addon) => [addon.name, addon.price])));
-      const addons = (item.addonNames ?? []).map((name) => {
+      const addons = selectedNames.map((name) => {
         const price = allowed.get(name);
         if (price === undefined) throw new BadRequestException(`Invalid add-on: ${name}`);
         return { name, price };
       });
+      for (const group of product.addonGroups) {
+        const selectedCount = selectedNames.filter((name) => group.addons.some((addon) => addon.name === name)).length;
+        const minimum = group.min ?? (group.required ? 1 : 0);
+        const maximum = group.max ?? 1;
+        if (selectedCount < minimum || selectedCount > maximum) throw new BadRequestException(`Invalid add-on selection for group: ${group.name}`);
+      }
       return { productName: product.name, unitPrice: product.promotionalPrice ?? product.price, quantity: item.quantity, addons, observation: item.observation };
     });
     const subtotal = items.reduce((sum, item) => sum + item.quantity * (item.unitPrice + item.addons.reduce((total, addon) => total + addon.price, 0)), 0);
@@ -68,7 +76,10 @@ export class OrdersService {
       discount = Math.min(discount, subtotal);
       couponId = coupon._id;
     }
-    const order = await this.orders.create({ customerName: input.customerName, phone: input.phone, fulfillment: input.fulfillment, paymentMethod: input.paymentMethod, address: input.address, changeFor: input.changeFor, restaurantId: new Types.ObjectId(restaurantId), items, subtotal, deliveryFee, discount, total: subtotal + deliveryFee - discount });
+    const total = subtotal + deliveryFee - discount;
+    if (input.changeFor !== undefined && input.paymentMethod !== 'CASH') throw new BadRequestException('Change is only available for cash payments');
+    if (input.changeFor !== undefined && input.changeFor < total) throw new BadRequestException('Change amount must cover the order total');
+    const order = await this.orders.create({ customerName: input.customerName, phone: input.phone, fulfillment: input.fulfillment, paymentMethod: input.paymentMethod, address: input.address, changeFor: input.changeFor, restaurantId: new Types.ObjectId(restaurantId), items, subtotal, deliveryFee, discount, total });
     if (couponId) await this.coupons.updateOne({ _id: couponId, $or: [{ usageLimit: { $exists: false } }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }] }, { $inc: { usageCount: 1 } });
     await this.customers.findOneAndUpdate(
       { restaurantId, phone: input.phone },

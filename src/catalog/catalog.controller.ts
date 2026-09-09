@@ -1,4 +1,40 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common'; import { IsBoolean, IsMongoId, IsNumber, IsOptional, IsString, Min } from 'class-validator'; import { JwtGuard } from '../auth/jwt.guard'; import { Role } from '../common/roles'; import { Roles, RolesGuard } from '../common/roles.guard'; import { TenantGuard } from '../common/tenant.guard'; import { CatalogService } from './catalog.service';
-class CreateCategoryDto { @IsString() name!: string; @IsOptional() @IsNumber() @Min(0) order?: number; }
-class CreateProductDto { @IsMongoId() categoryId!: string; @IsString() name!: string; @IsNumber() @Min(0) price!: number; @IsOptional() @IsString() description?: string; @IsOptional() @IsString() imageUrl?: string; @IsOptional() @IsNumber() @Min(0) promotionalPrice?: number; @IsOptional() @IsBoolean() available?: boolean; @IsOptional() @IsBoolean() featured?: boolean; @IsOptional() @IsNumber() @Min(0) order?: number; }
-@Controller('restaurants/:restaurantId') export class CatalogController { constructor(private readonly catalog: CatalogService) {} @Get('categories') categories(@Param('restaurantId') id: string) { return this.catalog.categoriesFor(id); } @Get('products') products(@Param('restaurantId') id: string) { return this.catalog.productsFor(id); } @Get('menu') menu(@Param('restaurantId') id: string) { return this.catalog.publicMenu(id); } @Post('categories') @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) createCategory(@Param('restaurantId') id: string, @Body() body: CreateCategoryDto) { return this.catalog.createCategory(id, body); } @Patch('categories/:categoryId') @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) updateCategory(@Param('restaurantId') restaurantId: string, @Param('categoryId') categoryId: string, @Body() body: Partial<CreateCategoryDto>) { return this.catalog.updateCategory(restaurantId, categoryId, body); } @Post('products') @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) create(@Param('restaurantId') id: string, @Body() body: CreateProductDto) { return this.catalog.createProduct(id, body); } @Patch('products/:productId') @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) update(@Param('restaurantId') restaurantId: string, @Param('productId') productId: string, @Body() body: Partial<CreateProductDto>) { return this.catalog.updateProduct(restaurantId, productId, body); } }
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, IsArray, IsBoolean, IsMongoId, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { JwtGuard } from '../auth/jwt.guard';
+import { Role } from '../common/roles';
+import { Roles, RolesGuard } from '../common/roles.guard';
+import { TenantGuard } from '../common/tenant.guard';
+import { CatalogService } from './catalog.service';
+
+class AddonDto { @IsString() name!: string; @IsNumber() @Min(0) price!: number; }
+class AddonGroupDto {
+  @IsString() name!: string;
+  @IsOptional() @IsBoolean() required?: boolean;
+  @IsOptional() @IsNumber() @Min(0) min?: number;
+  @IsOptional() @IsNumber() @Min(1) max?: number;
+  @IsArray() @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => AddonDto) addons!: AddonDto[];
+}
+class CreateCategoryDto { @IsString() name!: string; @IsOptional() @IsNumber() @Min(0) order?: number; @IsOptional() @IsBoolean() active?: boolean; }
+class CreateProductDto {
+  @IsMongoId() categoryId!: string; @IsString() name!: string; @IsNumber() @Min(0) price!: number;
+  @IsOptional() @IsString() description?: string; @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsNumber() @Min(0) promotionalPrice?: number; @IsOptional() @IsBoolean() available?: boolean;
+  @IsOptional() @IsBoolean() featured?: boolean; @IsOptional() @IsNumber() @Min(0) order?: number;
+  @IsOptional() @IsArray() @ArrayMaxSize(20) @ValidateNested({ each: true }) @Type(() => AddonGroupDto) addonGroups?: AddonGroupDto[];
+}
+@Controller('restaurants/:restaurantId')
+export class CatalogController {
+  constructor(private readonly catalog: CatalogService) {}
+  @Get('categories') categories(@Param('restaurantId') id: string) { return this.catalog.categoriesFor(id); }
+  @Get('products') products(@Param('restaurantId') id: string) { return this.catalog.productsFor(id); }
+  @Get('menu') menu(@Param('restaurantId') id: string) { return this.catalog.publicMenu(id); }
+  @Post('categories') @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard)
+  createCategory(@Param('restaurantId') id: string, @Body() body: CreateCategoryDto) { return this.catalog.createCategory(id, body); }
+  @Patch('categories/:categoryId') @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard)
+  updateCategory(@Param('restaurantId') restaurantId: string, @Param('categoryId') categoryId: string, @Body() body: Partial<CreateCategoryDto>) { return this.catalog.updateCategory(restaurantId, categoryId, body); }
+  @Post('products') @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard)
+  create(@Param('restaurantId') id: string, @Body() body: CreateProductDto) { return this.catalog.createProduct(id, body); }
+  @Patch('products/:productId') @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard)
+  update(@Param('restaurantId') restaurantId: string, @Param('productId') productId: string, @Body() body: Partial<CreateProductDto>) { return this.catalog.updateProduct(restaurantId, productId, body); }
+}

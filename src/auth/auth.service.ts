@@ -43,5 +43,13 @@ export class AuthService implements OnModuleInit {
     if (!user || !user.active) throw new UnauthorizedException('Invalid credentials');
     return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() };
   }
+  async updateProfile(id: string, input: { name?: string; phone?: string }) {
+    const changes: Record<string, string> = {};
+    if (input.name !== undefined) changes.name = input.name.trim();
+    if (input.phone !== undefined) changes.phone = input.phone.trim();
+    const user = await this.users.findByIdAndUpdate(id, { $set: changes }, { new: true, runValidators: true });
+    if (!user || !user.active) throw new UnauthorizedException('Invalid credentials');
+    return this.profile(user.id);
+  }
   async login(email: string, password: string) { const user = await this.users.findOne({ email: email.trim().toLowerCase() }).select('+passwordHash'); if (!user || !user.active || !(await bcrypt.compare(password, user.passwordHash))) throw new UnauthorizedException('Invalid credentials'); return { accessToken: await this.jwt.signAsync({ sub: user.id, role: user.role, restaurantId: user.restaurantId?.toString() }), user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() } }; }
 }

@@ -70,6 +70,12 @@ export class RestaurantsService {
     return { establishment: withDefaultType(establishment!), settings };
   }
 
+  async memberContext(restaurantId: string) {
+    await this.ensureRestaurant(restaurantId);
+    const establishment = await this.restaurants.findById(restaurantId).select('name tradeName slug open').lean();
+    return { establishment };
+  }
+
   async updateWithOwner(restaurantId: string, establishment: Partial<Restaurant>, owner?: { userId: string; name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
     await this.ensureRestaurant(restaurantId);
     const currentRestaurant = await this.restaurants.findById(restaurantId).lean();

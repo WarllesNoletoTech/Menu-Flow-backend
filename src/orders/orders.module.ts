@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Coupon, CouponSchema, Customer, CustomerSchema, DeliveryZone, DeliveryZoneSchema, Order, OrderSchema, Product, ProductSchema, Restaurant, RestaurantSchema, RestaurantSettings, RestaurantSettingsSchema } from '../common/schemas';
-import { CustomerOrdersController, OrdersController } from './orders.controller';
+import { CustomerOrdersController, EmployeeOrdersController, OrdersController } from './orders.controller';
 import { OrdersGateway } from './orders.gateway';
 import { OrdersService } from './orders.service';
 import { AuthModule } from '../auth/auth.module';
@@ -16,7 +16,7 @@ import { AuthModule } from '../auth/auth.module';
     { name: RestaurantSettings.name, schema: RestaurantSettingsSchema },
     { name: Coupon.name, schema: CouponSchema },
   ])],
-  controllers: [OrdersController, CustomerOrdersController],
+  controllers: [OrdersController, CustomerOrdersController, EmployeeOrdersController],
   providers: [OrdersService, OrdersGateway],
 })
 export class OrdersModule {}

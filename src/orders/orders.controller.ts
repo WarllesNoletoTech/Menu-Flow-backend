@@ -34,3 +34,5 @@ export class OrdersController {
 }
 @Controller('customer/orders') @UseGuards(JwtGuard, RolesGuard) @Roles(Role.CUSTOMER)
 export class CustomerOrdersController { constructor(private readonly orders: OrdersService) {} @Get() list(@Req() request: { user: { sub: string } }) { return this.orders.forCustomer(request.user.sub); } }
+@Controller('employee/orders') @UseGuards(JwtGuard, RolesGuard) @Roles(Role.EMPLOYEE)
+export class EmployeeOrdersController { constructor(private readonly orders: OrdersService) {} @Get() list(@Req() request: { user: { restaurantId: string } }) { return this.orders.list(request.user.restaurantId); } @Patch(':orderId/status') update(@Req() request: { user: { restaurantId: string } }, @Param('orderId') orderId: string, @Body() body: UpdateOrderStatusDto) { return this.orders.updateStatus(request.user.restaurantId, orderId, body.status); } }

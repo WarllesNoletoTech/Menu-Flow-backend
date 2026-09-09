@@ -56,6 +56,8 @@ export class RestaurantsController {
   @Get() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) list() { return this.restaurants.list(); }
   @Get('me') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   mine(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.ownerDetail(request.user.restaurantId); }
+  @Get('my-context') @Roles(Role.RESTAURANT_ADMIN, Role.EMPLOYEE) @UseGuards(JwtGuard, RolesGuard)
+  myContext(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.memberContext(request.user.restaurantId); }
   @Patch('me') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   updateMine(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateRestaurantDto) { return this.restaurants.update(request.user.restaurantId, body, Role.RESTAURANT_ADMIN); }
   @Patch('me/settings') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)

@@ -45,9 +45,11 @@ export class RestaurantsService {
   }
 
   async list(): Promise<Array<Record<string, unknown>>> {
-    const restaurants = (await this.restaurants.find().sort({ createdAt: -1 }).lean()).map(withDefaultType);
+    const fields = 'name slug tradeName cnpj email phone whatsapp instagram address state city description logoUrl bannerUrl establishmentType restaurantCategories open blocked';
+    const restaurants = (await this.restaurants.find().select(fields).sort({ createdAt: -1 }).lean()).map(withDefaultType);
     const owners = await this.users.find({ role: Role.RESTAURANT_ADMIN, restaurantId: { $in: restaurants.map((item) => item._id) } }).select('name email restaurantId').sort({ createdAt: 1 }).lean();
-    return restaurants.map((restaurant) => ({ ...restaurant, owner: owners.find((owner) => owner.restaurantId?.toString() === restaurant._id.toString()) ? ownerSummary(owners.find((owner) => owner.restaurantId?.toString() === restaurant._id.toString())!) : undefined })) as Array<Record<string, unknown>>;
+    const ownerByRestaurant = new Map(owners.map((owner) => [owner.restaurantId?.toString(), ownerSummary(owner)]));
+    return restaurants.map((restaurant) => ({ ...restaurant, owner: ownerByRestaurant.get(restaurant._id.toString()) })) as Array<Record<string, unknown>>;
   }
 
   async addOwner(restaurantId: string, owner: { name: string; email: string; phone?: string; password: string }) {

@@ -55,7 +55,7 @@ export class RestaurantsService {
   async adminDetail(restaurantId: string) {
     await this.ensureRestaurant(restaurantId);
     const establishment = await this.restaurants.findById(restaurantId).select('-__v').lean();
-    const users = await this.users.find({ restaurantId: new Types.ObjectId(restaurantId), role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: { $exists: false } })
+    const users = await this.users.find({ restaurantId: new Types.ObjectId(restaurantId), role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null })
       .select('name email phone role active restaurantId').sort({ createdAt: 1 }).lean();
     const summaries = users.map(storeUserSummary);
     return { establishment: withDefaultType(establishment!), owner: summaries.find((user) => user.role === Role.RESTAURANT_ADMIN) ?? null, users: summaries };
@@ -109,8 +109,8 @@ export class RestaurantsService {
     const restaurants = (await this.restaurants.find().select(fields).sort({ createdAt: -1 }).lean()).map(withDefaultType);
     const restaurantIds = restaurants.map((item) => item._id);
     const [owners, employeeCounts] = await Promise.all([
-      this.users.find({ role: Role.RESTAURANT_ADMIN, restaurantId: { $in: restaurantIds }, deletedAt: { $exists: false } }).select('name email phone active restaurantId').sort({ createdAt: 1 }).lean(),
-      this.users.aggregate<{ _id: Types.ObjectId; count: number }>([{ $match: { role: Role.EMPLOYEE, restaurantId: { $in: restaurantIds }, deletedAt: { $exists: false } } }, { $group: { _id: '$restaurantId', count: { $sum: 1 } } }]),
+      this.users.find({ role: Role.RESTAURANT_ADMIN, restaurantId: { $in: restaurantIds }, deletedAt: null }).select('name email phone active restaurantId').sort({ createdAt: 1 }).lean(),
+      this.users.aggregate<{ _id: Types.ObjectId; count: number }>([{ $match: { role: Role.EMPLOYEE, restaurantId: { $in: restaurantIds }, deletedAt: null } }, { $group: { _id: '$restaurantId', count: { $sum: 1 } } }]),
     ]);
     const ownerByRestaurant = new Map(owners.map((owner) => [owner.restaurantId?.toString(), ownerSummary(owner)]));
     const employeesByRestaurant = new Map(employeeCounts.map((item) => [item._id.toString(), item.count]));
@@ -119,7 +119,7 @@ export class RestaurantsService {
 
   async addOwner(restaurantId: string, owner: { name: string; email: string; phone?: string; password: string }) {
     if (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: restaurantId }))) throw new NotFoundException('Estabelecimento não encontrado.');
-    if (await this.users.exists({ restaurantId: new Types.ObjectId(restaurantId), role: Role.RESTAURANT_ADMIN })) throw new ConflictException('Este estabelecimento já possui um lojista responsável.');
+    if (await this.hasOwnerIncludingLegacyString(restaurantId)) throw new ConflictException('Este estabelecimento já possui um lojista responsável.');
     try { return await this.auth.create(owner.name, owner.email, owner.password, Role.RESTAURANT_ADMIN, restaurantId, owner.phone); }
     catch (error) { if (error instanceof ConflictException) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.'); throw error; }
   }
@@ -133,7 +133,7 @@ export class RestaurantsService {
   async updateStoreUser(restaurantId: string, userId: string, input: { name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
     await this.ensureRestaurant(restaurantId);
     if (!Types.ObjectId.isValid(userId)) throw new NotFoundException('Usuário não encontrado.');
-    const user = await this.users.findOne({ _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: { $exists: false } });
+    const user = await this.users.findOne({ _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null });
     if (!user) throw new NotFoundException('Usuário não encontrado neste estabelecimento.');
     return this.applyStoreUserUpdate(user, restaurantId, input);
   }
@@ -156,18 +156,18 @@ export class RestaurantsService {
 
   async usersForRestaurant(restaurantId: string) {
     if (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: restaurantId }))) throw new NotFoundException('Estabelecimento não encontrado.');
-    return (await this.users.find({ restaurantId, role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: { $exists: false } }).select('name email phone role active').sort({ createdAt: 1 }).lean()).map((user) => ({ id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, active: user.active }));
+    return (await this.users.find({ restaurantId, role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null }).select('name email phone role active').sort({ createdAt: 1 }).lean()).map((user) => ({ id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, active: user.active }));
   }
 
   async employeesForRestaurant(restaurantId: string) {
     await this.ensureRestaurant(restaurantId);
-    return (await this.users.find({ restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: { $exists: false } }).select('name email phone role active').sort({ createdAt: 1 }).lean()).map(storeUserSummary);
+    return (await this.users.find({ restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: null }).select('name email phone role active').sort({ createdAt: 1 }).lean()).map(storeUserSummary);
   }
 
   async updateEmployee(restaurantId: string, userId: string, input: { name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
     await this.ensureRestaurant(restaurantId);
     if (!Types.ObjectId.isValid(userId)) throw new NotFoundException('Funcionário não encontrado.');
-    const user = await this.users.findOne({ _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: { $exists: false } });
+    const user = await this.users.findOne({ _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: null });
     if (!user) throw new NotFoundException('Funcionário não encontrado neste estabelecimento.');
     return this.applyStoreUserUpdate(user, restaurantId, input);
   }
@@ -176,7 +176,7 @@ export class RestaurantsService {
     await this.ensureRestaurant(restaurantId);
     if (!Types.ObjectId.isValid(userId)) throw new NotFoundException('Funcionário não encontrado.');
     const employee = await this.users.findOneAndUpdate(
-      { _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: { $exists: false } },
+      { _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: null },
       { $set: { active: false, deletedAt: new Date() } },
       { new: true },
     ).select('name email phone role active').lean();
@@ -236,6 +236,13 @@ export class RestaurantsService {
 
   private async ensureRestaurant(restaurantId: string) {
     if (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: new Types.ObjectId(restaurantId) }))) throw new NotFoundException('Estabelecimento não encontrado.');
+  }
+
+  private async hasOwnerIncludingLegacyString(restaurantId: string) {
+    return Boolean(await this.users.collection.findOne({
+      role: Role.RESTAURANT_ADMIN,
+      $expr: { $eq: [{ $convert: { input: '$restaurantId', to: 'objectId', onError: null, onNull: null } }, new Types.ObjectId(restaurantId)] },
+    }, { projection: { _id: 1 } }));
   }
 }
 

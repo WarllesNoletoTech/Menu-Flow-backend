@@ -6,6 +6,8 @@
   },
   "scripts": {
     "create-super-admin": "npm run build && node dist/scripts/create-super-admin.js",
+    "check:legacy-links": "npm run build && node dist/scripts/check-legacy-user-links.js",
+    "migrate:legacy-links": "npm run build && node dist/scripts/migrate-legacy-restaurant-links.js",
     "start:dev": "nest start --watch",
     "build": "nest build",
     "lint": "tsc --noEmit",

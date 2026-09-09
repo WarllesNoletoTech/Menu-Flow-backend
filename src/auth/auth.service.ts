@@ -32,12 +32,16 @@ export class AuthService implements OnModuleInit {
     email = email.trim().toLowerCase();
     const requiresRestaurant = role === Role.RESTAURANT_ADMIN || role === Role.EMPLOYEE;
     if ((requiresRestaurant && !restaurantId) || (!requiresRestaurant && restaurantId)) throw new BadRequestException('Restaurant membership does not match the selected role');
-    if (restaurantId && (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: restaurantId })))) throw new BadRequestException('Restaurant not found');
-    if (role === Role.RESTAURANT_ADMIN && await this.users.exists({ role: Role.RESTAURANT_ADMIN, restaurantId: new Types.ObjectId(restaurantId!) })) {
+    if (restaurantId && (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: new Types.ObjectId(restaurantId) })))) throw new BadRequestException('Restaurant not found');
+    const normalizedRestaurantId = restaurantId ? new Types.ObjectId(restaurantId) : undefined;
+    if (role === Role.RESTAURANT_ADMIN && await this.users.collection.findOne({
+      role: Role.RESTAURANT_ADMIN,
+      $expr: { $eq: [{ $convert: { input: '$restaurantId', to: 'objectId', onError: null, onNull: null } }, normalizedRestaurantId] },
+    }, { projection: { _id: 1 } })) {
       throw new ConflictException('Este estabelecimento já possui um lojista responsável.');
     }
     if (await this.users.exists({ email })) throw new ConflictException('Email already exists');
-    const user = await this.users.create({ name, email, phone, passwordHash: await bcrypt.hash(password, 12), role, restaurantId, active: true });
+    const user = await this.users.create({ name, email, phone, passwordHash: await bcrypt.hash(password, 12), role, restaurantId: normalizedRestaurantId, active: true });
     return { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, restaurantId: user.restaurantId?.toString() };
   }
   registerCustomer(name: string, email: string, password: string, phone: string) { return this.create(name, email, password, Role.CUSTOMER, undefined, phone); }

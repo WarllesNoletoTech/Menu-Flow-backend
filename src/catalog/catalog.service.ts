@@ -15,9 +15,9 @@ export class CatalogService {
   manageCategories(restaurantId: string) { return this.categories.find({ restaurantId }).sort({ order: 1, _id: 1 }).lean(); }
   manageProducts(restaurantId: string) { return this.products.find({ restaurantId }).sort({ categoryId: 1, order: 1, _id: 1 }).lean(); }
   async publicMenu(restaurantId: string) { const categories = await this.categoriesFor(restaurantId); const products = await this.products.find({ restaurantId, available: true, categoryId: { $in: categories.map(category => category._id) } }).sort({ order: 1 }).lean(); return { categories, products }; }
-  createCategory(restaurantId: string, input: { name: string; order?: number; active?: boolean }) { return this.categories.create({ ...input, restaurantId: new Types.ObjectId(restaurantId) }); }
+  createCategory(restaurantId: string, input: { name: string; order?: number; active?: boolean }) { this.ensureRestaurantId(restaurantId); return this.categories.create({ ...input, name: input.name.trim(), restaurantId: new Types.ObjectId(restaurantId) }); }
   async updateCategory(restaurantId: string, id: string, input: Partial<Category>) { const category = await this.categories.findOneAndUpdate({ _id: id, restaurantId }, input, { new: true, runValidators: true }); if (!category) throw new NotFoundException('Category not found'); return category; }
-  async createProduct(restaurantId: string, input: ProductInput) { await this.ensureProductInput(restaurantId, input); return this.products.create({ ...input, restaurantId: new Types.ObjectId(restaurantId) }); }
+  async createProduct(restaurantId: string, input: ProductInput) { this.ensureRestaurantId(restaurantId); await this.ensureProductInput(restaurantId, input); return this.products.create({ ...input, restaurantId: new Types.ObjectId(restaurantId) }); }
   async updateProduct(restaurantId: string, id: string, input: ProductUpdateInput) {
     if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Product not found');
     const existing = await this.products.findOne({ _id: id, restaurantId }).lean();
@@ -33,7 +33,10 @@ export class CatalogService {
   reorderCategories(restaurantId: string, items: Array<{ id: string; order: number }>) { return this.reorder(this.categories, restaurantId, items); }
   reorderProducts(restaurantId: string, items: Array<{ id: string; order: number }>) { return this.reorder(this.products, restaurantId, items); }
   private async reorder(model: Model<Category> | Model<Product>, restaurantId: string, items: Array<{ id: string; order: number }>) { const ids = items.map(item => item.id); if (new Set(ids).size !== ids.length || new Set(items.map(item => item.order)).size !== items.length || ids.some(id => !Types.ObjectId.isValid(id))) throw new BadRequestException('A ordenação contém itens ou posições duplicadas.'); const owned = await model.countDocuments({ _id: { $in: ids }, restaurantId }); if (owned !== ids.length) throw new NotFoundException('Um ou mais itens não pertencem ao estabelecimento.'); await (model as unknown as Model<Record<string, unknown>>).bulkWrite(items.map(item => ({ updateOne: { filter: { _id: item.id, restaurantId }, update: { $set: { order: item.order } } } }))); return { updated: items.length }; }
+  private ensureRestaurantId(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new BadRequestException('Estabelecimento inválido para a operação de catálogo.'); }
   private async ensureProductInput(restaurantId: string, input: Partial<ProductInput>) {
+    this.ensureRestaurantId(restaurantId);
+    if (input.categoryId !== undefined && !Types.ObjectId.isValid(input.categoryId)) throw new BadRequestException('Categoria inválida para o produto.');
     if (input.categoryId && !(await this.categories.exists({ _id: input.categoryId, restaurantId }))) throw new NotFoundException('Category not found');
     if (input.promotionalPrice !== undefined && input.promotionalPrice !== null && input.price !== undefined && input.promotionalPrice > input.price) throw new BadRequestException('Promotional price cannot exceed the regular price');
     if (!input.addonGroups) return;

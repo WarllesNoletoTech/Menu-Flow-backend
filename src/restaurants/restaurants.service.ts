@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import * as bcrypt from 'bcrypt';
@@ -10,6 +10,7 @@ import { DEFAULT_TIMEZONE, openingStatus, validateBusinessHours } from './busine
 
 @Injectable()
 export class RestaurantsService {
+  private readonly logger = new Logger(RestaurantsService.name);
   constructor(@InjectModel(Restaurant.name) private readonly restaurants: Model<RestaurantDocument>, @InjectModel(RestaurantSettings.name) private readonly settings: Model<RestaurantSettings>, @InjectModel(User.name) private readonly users: Model<UserDocument>, @InjectModel(AuditLog.name) private readonly audits: Model<AuditLog>, private readonly auth: AuthService, private readonly locations: LocationsService) {}
 
   async create(input: Pick<Restaurant, 'name' | 'slug'> & Partial<Restaurant>) {
@@ -229,7 +230,50 @@ export class RestaurantsService {
   async update(id: string, input: Partial<Restaurant>, actorRole: Role) { if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
   async updateSettings(id: string, input: Partial<RestaurantSettings>) { const settings = await this.settings.findOneAndUpdate({ restaurantId: id }, input, { new: true, runValidators: true }); if (!settings) throw new NotFoundException('Restaurant settings not found'); return settings; }
   async businessHours(id: string): Promise<Record<string, unknown>> { await this.ensureRestaurant(id); const [restaurant, settings] = await Promise.all([this.restaurants.findById(id).select('name timezone').lean(), this.settings.findOne({ restaurantId: id }).lean()]); return { restaurantId: id, restaurantName: restaurant!.name, timezone: restaurant!.timezone || DEFAULT_TIMEZONE, configured: Boolean(settings?.openingHours?.length), days: settings?.openingHours ?? [] }; }
-  async updateBusinessHours(id: string, days: BusinessDay[], actorId: string, admin: boolean): Promise<Record<string, unknown>> { await this.ensureRestaurant(id); const normalized = validateBusinessHours(days); const settings = await this.settings.findOneAndUpdate({ restaurantId: id }, { $set: { openingHours: normalized }, $setOnInsert: { restaurantId: new Types.ObjectId(id) } }, { new: true, upsert: true, runValidators: true }); if (admin) await this.audits.create({ actorId: new Types.ObjectId(actorId), action: 'BUSINESS_HOURS_UPDATED', targetType: 'Restaurant', targetId: new Types.ObjectId(id), metadata: { periods: normalized.reduce((sum, day) => sum + day.periods.length, 0) } }); return { restaurantId: id, timezone: (await this.restaurants.findById(id).select('timezone').lean())?.timezone || DEFAULT_TIMEZONE, configured: true, days: settings.openingHours }; }
+  async updateBusinessHours(id: string, days: BusinessDay[], actorId: string, admin: boolean): Promise<Record<string, unknown>> {
+    await this.ensureRestaurant(id);
+    const restaurantId = new Types.ObjectId(id);
+    const normalized = validateBusinessHours(days);
+    try {
+      // Do not combine the equality filter and $setOnInsert for restaurantId. Besides
+      // triggering conflicting-update errors on some deployed MongoDB/Mongoose
+      // combinations, that upsert silently creates a second settings document when
+      // an old installation stored restaurantId as a BSON string.
+      let settings = await this.settings.findOne({ restaurantId });
+      if (!settings) {
+        const legacy = await this.settings.collection.findOne({ restaurantId: id });
+        if (legacy) {
+          await this.settings.collection.updateOne(
+            { _id: legacy._id, restaurantId: id },
+            { $set: { restaurantId, openingHours: normalized } },
+          );
+          settings = await this.settings.findById(legacy._id);
+        } else {
+          try { settings = await this.settings.create({ restaurantId, openingHours: normalized }); }
+          catch (error) {
+            // A concurrent first save may win the unique index race.
+            if ((error as { code?: number }).code !== 11000) throw error;
+            settings = await this.settings.findOne({ restaurantId });
+            if (!settings) throw error;
+            settings.openingHours = normalized;
+            await settings.save();
+          }
+        }
+      } else {
+        settings.openingHours = normalized;
+        await settings.save();
+      }
+      if (!settings) throw new Error('RestaurantSettings was not readable after persistence');
+      if (admin) await this.audits.create({ actorId: new Types.ObjectId(actorId), action: 'BUSINESS_HOURS_UPDATED', targetType: 'Restaurant', targetId: restaurantId, metadata: { periods: normalized.reduce((sum, day) => sum + day.periods.length, 0) } });
+      const restaurant = await this.restaurants.findById(restaurantId).select('timezone').lean();
+      return { restaurantId: id, timezone: restaurant?.timezone || DEFAULT_TIMEZONE, configured: true, days: settings.openingHours };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      this.logger.error(`Business-hours persistence failed (restaurantId=${id}, days=${normalized.length}): ${detail}`, error instanceof Error ? error.stack : undefined);
+      throw new InternalServerErrorException('Não foi possível salvar os horários de funcionamento. Tente novamente.');
+    }
+  }
 
   private async validateLocation(state?: string, city?: string) {
     if (!state || !city) throw new BadRequestException('Estado e cidade válidos são obrigatórios.');

@@ -23,7 +23,9 @@
     "migrate:integration-contracts": "npm run build && node dist/scripts/migrate-integration-contracts.js --apply",
     "check:delivery-coverage": "npm run build && node dist/scripts/migrate-delivery-coverage.js",
     "migrate:delivery-coverage": "npm run build && node dist/scripts/migrate-delivery-coverage.js --apply",
-    "migrate:order-whatsapp": "npm run build && node dist/scripts/migrate-order-whatsapp.js"
+    "migrate:order-whatsapp": "npm run build && node dist/scripts/migrate-order-whatsapp.js",
+    "check:establishment-types": "npm run build && node dist/scripts/migrate-establishment-types.js",
+    "migrate:establishment-types": "npm run build && node dist/scripts/migrate-establishment-types.js --apply"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

@@ -4,7 +4,7 @@ import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsEnum, IsIn, 
 import { JwtGuard } from '../auth/jwt.guard';
 import { Role } from '../common/roles';
 import { Roles, RolesGuard } from '../common/roles.guard';
-import { DeliveryCoverageType, EstablishmentType } from '../common/schemas';
+import { DeliveryCoverageType } from '../common/schemas';
 import { TenantGuard } from '../common/tenant.guard';
 import { RestaurantsService } from './restaurants.service';
 
@@ -20,7 +20,7 @@ class CreateRestaurantDto {
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() city?: string;
   @IsOptional() @Matches(/^[A-Z]{2}$/) state?: string;
-  @IsOptional() @IsEnum(EstablishmentType) establishmentType?: EstablishmentType;
+  @IsOptional() @IsMongoId() establishmentTypeId?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsString() whatsapp?: string;
   @IsOptional() @IsString() orderWhatsapp?: string;
@@ -91,7 +91,7 @@ export class RestaurantsController {
   @Delete('me/users/:userId') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   deleteMyEmployee(@Req() request: { user: { restaurantId: string } }, @Param('userId') userId: string) { return this.restaurants.deleteEmployee(request.user.restaurantId, userId); }
   @Post() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) create(@Body() body: CreateRestaurantDto) { return this.restaurants.create(body); }
-  @Post('with-admin') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) createWithOwner(@Body() body: EstablishmentWithOwnerDto) { return this.restaurants.createWithOwner(body.establishment as Required<Pick<CreateRestaurantDto, 'name' | 'slug' | 'city' | 'state' | 'establishmentType'>> & CreateRestaurantDto, body.owner); }
+  @Post('with-admin') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) createWithOwner(@Body() body: EstablishmentWithOwnerDto) { return this.restaurants.createWithOwner(body.establishment as Required<Pick<CreateRestaurantDto, 'name' | 'slug' | 'city' | 'state' | 'establishmentTypeId'>> & CreateRestaurantDto, body.owner); }
   @Get(':restaurantId/admin-detail') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) adminDetail(@Param('restaurantId') id: string) { return this.restaurants.adminDetail(id); }
   @Get(':restaurantId/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) businessHours(@Param('restaurantId') id: string) { return this.restaurants.businessHours(id); }
   @Patch(':restaurantId/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateBusinessHours(@Param('restaurantId') id: string, @Req() request: { user: { sub: string } }, @Body() body: BusinessHoursDto) { return this.restaurants.updateBusinessHours(id, body.days, request.user.sub, true); }

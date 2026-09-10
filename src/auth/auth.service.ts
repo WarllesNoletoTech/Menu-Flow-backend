@@ -46,7 +46,7 @@ export class AuthService implements OnModuleInit {
     const user = await this.users.create({ name, email, phone, reportWhatsapp: normalizedReportWhatsapp, passwordHash: await bcrypt.hash(password, 12), role, restaurantId: normalizedRestaurantId, active: true });
     return { id: user.id, name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString() };
   }
-  registerCustomer(name: string, email: string, password: string, phone: string) { return this.create(name, email, password, Role.CUSTOMER, undefined, phone); }
+  async registerCustomer(name: string, email: string, password: string, phone: string) { await this.create(name, email, password, Role.CUSTOMER, undefined, phone); return this.login(email, password); }
   async profile(id: string) {
     const user = await this.users.findOne({ _id: id, $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] }).lean();
     if (!user || !user.active) throw new UnauthorizedException('Invalid credentials');

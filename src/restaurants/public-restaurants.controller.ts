@@ -1,14 +1,13 @@
 import { Controller, Get, Header, Query } from '@nestjs/common';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { EstablishmentType } from '../common/schemas';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { RestaurantsService } from './restaurants.service';
 
 class PublicRestaurantsQuery {
   @IsOptional() @IsString() city?: string;
   @IsOptional() @IsString() state?: string;
   @IsOptional() @IsString() search?: string;
-  @IsOptional() @IsEnum(EstablishmentType) type?: EstablishmentType;
+  @IsOptional() @IsString() type?: string;
   @IsOptional() @Transform(({ value }) => value === 'true') @IsBoolean() open?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(50) limit = 12;

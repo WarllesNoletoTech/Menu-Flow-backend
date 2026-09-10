@@ -10,6 +10,19 @@ export enum EstablishmentType {
 }
 
 @Schema({ timestamps: true })
+export class EstablishmentTypeDefinition {
+  @Prop({ required: true, trim: true }) name!: string;
+  @Prop({ required: true, unique: true, lowercase: true, trim: true }) slug!: string;
+  @Prop({ required: true, unique: true, lowercase: true, trim: true }) normalizedName!: string;
+  @Prop({ default: true, index: true }) active!: boolean;
+  @Prop({ default: 0, index: true }) sortOrder!: number;
+  @Prop({ type: Types.ObjectId, ref: "User", required: true }) createdBy!: Types.ObjectId;
+}
+export type EstablishmentTypeDefinitionDocument = HydratedDocument<EstablishmentTypeDefinition>;
+export const EstablishmentTypeDefinitionSchema = SchemaFactory.createForClass(EstablishmentTypeDefinition);
+EstablishmentTypeDefinitionSchema.index({ sortOrder: 1, name: 1 });
+
+@Schema({ timestamps: true })
 export class Restaurant {
   @Prop({ required: true, trim: true }) name!: string;
   @Prop({ required: true, unique: true, lowercase: true, trim: true })
@@ -31,6 +44,8 @@ export class Restaurant {
   @Prop() pickupInstructions?: string;
   @Prop({ enum: EstablishmentType, default: EstablishmentType.RESTAURANT })
   establishmentType!: EstablishmentType;
+  @Prop({ type: Types.ObjectId, ref: "EstablishmentTypeDefinition", index: true })
+  establishmentTypeId?: Types.ObjectId;
   @Prop({ type: [String], default: [] }) restaurantCategories!: string[];
   @Prop({ default: false }) blocked!: boolean;
   @Prop({ default: true }) open!: boolean;

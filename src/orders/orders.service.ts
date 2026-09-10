@@ -177,15 +177,13 @@ export class OrdersService {
   async create(
     restaurantId: string,
     input: CheckoutInput,
-    customerId?: string,
+    customerId: string,
     idempotencyKey?: string,
   ) {
     if (!Types.ObjectId.isValid(restaurantId))
       throw new NotFoundException("Estabelecimento não encontrado.");
     const rid = new Types.ObjectId(restaurantId);
-    const authenticatedCustomerId = customerId
-      ? this.objectId(customerId, "Cliente autenticado inválido.")
-      : undefined;
+    const authenticatedCustomerId = this.objectId(customerId, "Cliente autenticado inválido.");
     if (idempotencyKey) {
       const existing = await this.orders
         .findOne({ restaurantId: rid, idempotencyKey })

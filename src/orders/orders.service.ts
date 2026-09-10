@@ -105,19 +105,25 @@ export class OrdersService {
   forCustomer(customerId: string) { const uid = this.objectId(customerId, 'Cliente inválido.'); return this.orders.find({ customerId: uid }).populate('restaurantId', 'name tradeName slug address mapUrl').sort({ createdAt: -1 }).limit(100).lean(); }
   async publicOrder(orderNumber: string, token: string) { const order = await this.orders.findOne({ orderNumber, publicToken: token }).populate('restaurantId', 'name tradeName slug address mapUrl').lean(); if (!order) throw new NotFoundException('Pedido não encontrado.'); return order; }
   async updateStatus(restaurantId: string, id: string, status: string, actorId: string, reason?: string) {
-    if (!Types.ObjectId.isValid(restaurantId) || !Types.ObjectId.isValid(id)) throw new NotFoundException('Pedido não encontrado.');
-    const order = await this.orders.findOne({ _id: id, restaurantId }); if (!order) throw new NotFoundException('Pedido não encontrado.');
+    const rid = this.objectId(restaurantId, 'Pedido não encontrado.', true);
+    const oid = this.objectId(id, 'Pedido não encontrado.', true);
+    const actor = this.objectId(actorId, 'Responsável pela alteração inválido.');
+    const order = await this.orders.findOne({ _id: oid, restaurantId: rid }); if (!order) throw new NotFoundException('Pedido não encontrado.');
     if (!transitions[order.status]?.includes(status)) throw new ConflictException('Transição de status inválida.');
     if (status === 'REJECTED' && !reason?.trim()) throw new BadRequestException('Informe o motivo da recusa.');
     if (order.fulfillment === 'PICKUP' && status === 'OUT_FOR_DELIVERY') throw new ConflictException('Pedidos para retirada não saem para entrega.');
-    const now = new Date(); const actor = new Types.ObjectId(actorId); order.status = status; order.statusHistory.push({ status, changedAt: now, changedBy: actor });
+    const now = new Date(); order.status = status;
+    if (!Array.isArray(order.statusHistory)) order.statusHistory = [];
+    order.statusHistory.push({ status, changedAt: now, changedBy: actor });
     if (status === 'ACCEPTED') { order.acceptedAt = now; order.acceptedBy = actor; } if (status === 'PREPARING') order.preparingAt = now; if (status === 'READY') order.readyAt = now; if (status === 'OUT_FOR_DELIVERY') order.outForDeliveryAt = now; if (status === 'COMPLETED') { order.completedAt = now; order.completedBy = actor; } if (status === 'REJECTED') { order.rejectedAt = now; order.rejectedBy = actor; order.rejectionReason = reason!.trim(); } if (status === 'CANCELLED') { order.cancelledAt = now; order.cancellationReason = reason?.trim(); }
-    await order.save(); this.gateway.publishOrderUpdated(restaurantId, order.customerId?.toString(), order.toJSON()); return order;
+    try { await order.save(); }
+    catch (error) { if ((error as { name?: string }).name === 'VersionError') throw new ConflictException('Este pedido já foi atualizado.'); throw error; }
+    this.gateway.publishOrderUpdated(rid.toHexString(), order.customerId?.toString(), order.toJSON()); return order;
   }
   async cancelByCustomer(customerId: string, id: string, reason?: string) { const order = await this.orders.findOne({ _id: id, customerId }); if (!order) throw new NotFoundException('Pedido não encontrado.'); if (order.status !== 'PENDING') throw new ConflictException('Após a aceitação, entre em contato com o estabelecimento.'); return this.updateStatus(order.restaurantId.toString(), id, 'CANCELLED', customerId, reason); }
 
   private validateAddress(address?: Record<string, string>) { for (const field of ['zipCode', 'street', 'number', 'neighborhood', 'city', 'state']) if (!address?.[field]?.trim()) throw new BadRequestException('Preencha o endereço completo para entrega.'); }
-  private objectId(value: string, message: string) { if (!Types.ObjectId.isValid(value)) throw new BadRequestException(message); return new Types.ObjectId(value); }
+  private objectId(value: string, message: string, notFound = false) { if (!Types.ObjectId.isValid(value)) { if (notFound) throw new NotFoundException(message); throw new BadRequestException(message); } return new Types.ObjectId(value); }
   private legacySelections(product: any, names: string[]) { return names.map((name) => { const matches = product.addonGroups.flatMap((group: any) => group.addons.filter((addon: any) => addon.name === name).map((addon: any) => ({ groupId: group._id?.toString(), addonId: addon._id?.toString() }))); if (matches.length !== 1 || !matches[0].groupId || !matches[0].addonId) throw new BadRequestException('Adicional antigo ambíguo. Selecione novamente.'); return matches[0]; }); }
   private async validCoupon(rid: Types.ObjectId, code: string, subtotalCents: number): Promise<any> { const now = new Date(); const coupon = await this.coupons.findOne({ restaurantId: rid, code: code.toUpperCase(), active: true, $and: [{ $or: [{ startsAt: { $exists: false } }, { startsAt: { $lte: now } }] }, { $or: [{ endsAt: { $exists: false } }, { endsAt: { $gte: now } }] }] }).lean(); if (!coupon || subtotalCents < Math.round(coupon.minimumOrder * 100) || (coupon.usageLimit !== undefined && coupon.usageCount >= coupon.usageLimit)) throw new BadRequestException('Cupom inválido.'); return coupon; }
   private async consumeCoupon(id: Types.ObjectId, orderId: Types.ObjectId) { const used = await this.coupons.updateOne({ _id: id, $or: [{ usageLimit: { $exists: false } }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }] }, { $inc: { usageCount: 1 } }); if (used.modifiedCount !== 1) { await this.orders.deleteOne({ _id: orderId }); throw new BadRequestException('O limite do cupom foi atingido.'); } }

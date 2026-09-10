@@ -8,6 +8,7 @@ import { AuthService } from '../auth/auth.service';
 import { LocationsService } from '../locations/locations.service';
 import { canAcceptOrdersNow, DEFAULT_TIMEZONE, openingStatus, validateBusinessHours } from './business-hours';
 import { normalizeBrazilianWhatsApp } from '../orders/order-whatsapp';
+import { normalizeReportWhatsapp } from '../users/report-whatsapp';
 
 @Injectable()
 export class RestaurantsService {
@@ -27,7 +28,7 @@ export class RestaurantsService {
     }
   }
 
-  async createWithOwner(input: Pick<Restaurant, 'name' | 'slug' | 'city' | 'state' | 'establishmentType'> & Partial<Restaurant>, owner: { name: string; email: string; phone?: string; password: string }) {
+  async createWithOwner(input: Pick<Restaurant, 'name' | 'slug' | 'city' | 'state' | 'establishmentType'> & Partial<Restaurant>, owner: { name: string; email: string; phone?: string; reportWhatsapp: string; password: string }) {
     const email = owner.email.trim().toLowerCase();
     input.slug = input.slug.trim().toLowerCase();
     if (!input.name.trim() || !input.establishmentType) throw new BadRequestException('Nome e tipo do estabelecimento são obrigatórios.');
@@ -38,7 +39,7 @@ export class RestaurantsService {
     let createdOwnerId: string | undefined;
     try {
       restaurant = await this.create(input);
-      const createdOwner = await this.auth.create(owner.name, email, owner.password, Role.RESTAURANT_ADMIN, restaurant.id, owner.phone);
+      const createdOwner = await this.auth.create(owner.name, email, owner.password, Role.RESTAURANT_ADMIN, restaurant.id, owner.phone, owner.reportWhatsapp);
       createdOwnerId = createdOwner.id;
       const linkedOwner = await this.users.exists({ _id: createdOwner.id, role: Role.RESTAURANT_ADMIN, restaurantId: restaurant._id });
       if (!linkedOwner) throw new BadRequestException('Não foi possível confirmar o vínculo do lojista ao estabelecimento.');
@@ -61,7 +62,7 @@ export class RestaurantsService {
     const rid = new Types.ObjectId(restaurantId);
     const [establishment, users, settings, deliveryZones, paymentMethods] = await Promise.all([
       this.restaurants.findById(rid).select('-__v').lean(),
-      this.users.find({ restaurantId: rid, role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null }).select('name email phone role active restaurantId').sort({ createdAt: 1 }).lean(),
+      this.users.find({ restaurantId: rid, role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null }).select('name email phone reportWhatsapp role active restaurantId').sort({ createdAt: 1 }).lean(),
       this.settings.findOne({ restaurantId: rid }).select('-__v').lean(),
       this.deliveryZones.find({ restaurantId: rid }).sort({ name: 1 }).lean(),
       this.payments.find({ restaurantId: rid }).sort({ method: 1 }).lean(),
@@ -93,7 +94,7 @@ export class RestaurantsService {
     return { establishment };
   }
 
-  async updateWithOwner(restaurantId: string, establishment: Partial<Restaurant>, owner?: { userId: string; name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
+  async updateWithOwner(restaurantId: string, establishment: Partial<Restaurant>, owner?: { userId: string; name?: string; email?: string; phone?: string; reportWhatsapp?: string; active?: boolean; password?: string }) {
     await this.ensureRestaurant(restaurantId);
     const currentRestaurant = await this.restaurants.findById(restaurantId).lean();
     if (!currentRestaurant) throw new NotFoundException('Estabelecimento não encontrado.');
@@ -127,7 +128,7 @@ export class RestaurantsService {
     const restaurants = (await this.restaurants.find().select(fields).sort({ createdAt: -1 }).lean()).map(withDefaultType);
     const restaurantIds = restaurants.map((item) => item._id);
     const [owners, employeeCounts] = await Promise.all([
-      this.users.find({ role: Role.RESTAURANT_ADMIN, restaurantId: { $in: restaurantIds }, deletedAt: null }).select('name email phone active restaurantId').sort({ createdAt: 1 }).lean(),
+      this.users.find({ role: Role.RESTAURANT_ADMIN, restaurantId: { $in: restaurantIds }, deletedAt: null }).select('name email phone reportWhatsapp active restaurantId').sort({ createdAt: 1 }).lean(),
       this.users.aggregate<{ _id: Types.ObjectId; count: number }>([{ $match: { role: Role.EMPLOYEE, restaurantId: { $in: restaurantIds }, deletedAt: null } }, { $group: { _id: '$restaurantId', count: { $sum: 1 } } }]),
     ]);
     const ownerByRestaurant = new Map(owners.map((owner) => [owner.restaurantId?.toString(), ownerSummary(owner)]));
@@ -135,10 +136,10 @@ export class RestaurantsService {
     return restaurants.map((restaurant) => ({ ...restaurant, owner: ownerByRestaurant.get(restaurant._id.toString()) ?? null, employeeCount: employeesByRestaurant.get(restaurant._id.toString()) ?? 0 })) as Array<Record<string, unknown>>;
   }
 
-  async addOwner(restaurantId: string, owner: { name: string; email: string; phone?: string; password: string }) {
+  async addOwner(restaurantId: string, owner: { name: string; email: string; phone?: string; reportWhatsapp: string; password: string }) {
     if (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: restaurantId }))) throw new NotFoundException('Estabelecimento não encontrado.');
     if (await this.hasOwnerIncludingLegacyString(restaurantId)) throw new ConflictException('Este estabelecimento já possui um lojista responsável.');
-    try { return await this.auth.create(owner.name, owner.email, owner.password, Role.RESTAURANT_ADMIN, restaurantId, owner.phone); }
+    try { return await this.auth.create(owner.name, owner.email, owner.password, Role.RESTAURANT_ADMIN, restaurantId, owner.phone, owner.reportWhatsapp); }
     catch (error) { if (error instanceof ConflictException) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.'); throw error; }
   }
 
@@ -148,7 +149,7 @@ export class RestaurantsService {
     catch (error) { if (error instanceof ConflictException) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.'); throw error; }
   }
 
-  async updateStoreUser(restaurantId: string, userId: string, input: { name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
+  async updateStoreUser(restaurantId: string, userId: string, input: { name?: string; email?: string; phone?: string; reportWhatsapp?: string; active?: boolean; password?: string }) {
     await this.ensureRestaurant(restaurantId);
     if (!Types.ObjectId.isValid(userId)) throw new NotFoundException('Usuário não encontrado.');
     const user = await this.users.findOne({ _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null });
@@ -156,10 +157,11 @@ export class RestaurantsService {
     return this.applyStoreUserUpdate(user, restaurantId, input);
   }
 
-  private async applyStoreUserUpdate(user: UserDocument, restaurantId: string, input: { name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
+  private async applyStoreUserUpdate(user: UserDocument, restaurantId: string, input: { name?: string; email?: string; phone?: string; reportWhatsapp?: string; active?: boolean; password?: string }) {
     const changes: Record<string, unknown> = {};
     if (input.name !== undefined) changes.name = input.name.trim();
     if (input.phone !== undefined) changes.phone = input.phone.trim();
+    if (input.reportWhatsapp !== undefined && user.role === Role.RESTAURANT_ADMIN) changes.reportWhatsapp = normalizeReportWhatsapp(input.reportWhatsapp);
     if (input.active !== undefined) changes.active = input.active;
     if (input.email !== undefined) {
       const email = input.email.trim().toLowerCase();
@@ -167,22 +169,22 @@ export class RestaurantsService {
       changes.email = email;
     }
     if (input.password) changes.passwordHash = await bcrypt.hash(input.password, 12);
-    const updated = await this.users.findOneAndUpdate({ _id: user._id, restaurantId: new Types.ObjectId(restaurantId), role: user.role }, { $set: changes }, { new: true, runValidators: true }).select('name email phone role active restaurantId').lean();
+    const updated = await this.users.findOneAndUpdate({ _id: user._id, restaurantId: new Types.ObjectId(restaurantId), role: user.role }, { $set: changes }, { new: true, runValidators: true }).select('name email phone reportWhatsapp role active restaurantId').lean();
     if (!updated) throw new NotFoundException('Usuário não encontrado.');
     return storeUserSummary(updated);
   }
 
   async usersForRestaurant(restaurantId: string) {
     if (!Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: restaurantId }))) throw new NotFoundException('Estabelecimento não encontrado.');
-    return (await this.users.find({ restaurantId, role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null }).select('name email phone role active').sort({ createdAt: 1 }).lean()).map((user) => ({ id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, active: user.active }));
+    return (await this.users.find({ restaurantId, role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null }).select('name email phone reportWhatsapp role active').sort({ createdAt: 1 }).lean()).map((user) => ({ id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, active: user.active }));
   }
 
   async employeesForRestaurant(restaurantId: string) {
     await this.ensureRestaurant(restaurantId);
-    return (await this.users.find({ restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: null }).select('name email phone role active').sort({ createdAt: 1 }).lean()).map(storeUserSummary);
+    return (await this.users.find({ restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: null }).select('name email phone reportWhatsapp role active').sort({ createdAt: 1 }).lean()).map(storeUserSummary);
   }
 
-  async updateEmployee(restaurantId: string, userId: string, input: { name?: string; email?: string; phone?: string; active?: boolean; password?: string }) {
+  async updateEmployee(restaurantId: string, userId: string, input: { name?: string; email?: string; phone?: string; reportWhatsapp?: string; active?: boolean; password?: string }) {
     await this.ensureRestaurant(restaurantId);
     if (!Types.ObjectId.isValid(userId)) throw new NotFoundException('Funcionário não encontrado.');
     const user = await this.users.findOne({ _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: null });
@@ -197,7 +199,7 @@ export class RestaurantsService {
       { _id: userId, restaurantId: new Types.ObjectId(restaurantId), role: Role.EMPLOYEE, deletedAt: null },
       { $set: { active: false, deletedAt: new Date() } },
       { new: true },
-    ).select('name email phone role active').lean();
+    ).select('name email phone reportWhatsapp role active').lean();
     if (!employee) throw new NotFoundException('Funcionário não encontrado neste estabelecimento.');
     return { message: 'Funcionário excluído; o histórico foi preservado.' };
   }
@@ -373,8 +375,8 @@ export class RestaurantsService {
 
 function publicRestaurant(restaurant: RestaurantDocument) { return { id: restaurant.id, name: restaurant.name, slug: restaurant.slug, city: restaurant.city, state: restaurant.state, establishmentType: restaurant.establishmentType }; }
 function publicRestaurantDetail(restaurant: RestaurantDocument) { const value = restaurant.toObject(); delete (value as { __v?: number }).__v; return withDefaultType(value); }
-function ownerSummary(owner: { _id: Types.ObjectId; name: string; email: string; phone?: string; active: boolean }) { return { id: owner._id.toString(), name: owner.name, email: owner.email, phone: owner.phone, active: owner.active }; }
-function storeUserSummary(user: { _id: Types.ObjectId; name: string; email: string; phone?: string; role: Role; active: boolean }) { return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, role: user.role, active: user.active }; }
+function ownerSummary(owner: { _id: Types.ObjectId; name: string; email: string; phone?: string; reportWhatsapp?: string; active: boolean }) { return { id: owner._id.toString(), name: owner.name, email: owner.email, phone: owner.phone, reportWhatsapp: owner.reportWhatsapp, active: owner.active }; }
+function storeUserSummary(user: { _id: Types.ObjectId; name: string; email: string; phone?: string; reportWhatsapp?: string; role: Role; active: boolean }) { return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, active: user.active }; }
 
 function escapeRegExp(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function withDefaultType<T extends { establishmentType?: EstablishmentType }>(item: T): T & { establishmentType: EstablishmentType } { return { ...item, establishmentType: item.establishmentType ?? EstablishmentType.RESTAURANT }; }

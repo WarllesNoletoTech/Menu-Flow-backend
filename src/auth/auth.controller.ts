@@ -13,6 +13,7 @@ class CustomerRegistrationDto extends BootstrapDto { @IsString() phone!: string;
 class UpdateMeDto {
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() reportWhatsapp?: string;
 }
 
 @Controller('auth')

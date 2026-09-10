@@ -97,6 +97,13 @@ export class CatalogController {
     return this.catalog.updateCategory(restaurantId, categoryId, body);
   }
 
+  @Patch('categories/:categoryId/archive')
+  @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN)
+  @UseGuards(JwtGuard, TenantGuard, RolesGuard)
+  archiveCategory(@Param('restaurantId') restaurantId: string, @Param('categoryId') id: string) {
+    return this.catalog.archiveCategory(restaurantId, id);
+  }
+
   @Post('products')
   @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN)
   @UseGuards(JwtGuard, TenantGuard, RolesGuard)
@@ -113,6 +120,14 @@ export class CatalogController {
     @Body() body: UpdateProductDto,
   ) {
     return this.catalog.updateProduct(restaurantId, productId, body);
+  }
+
+
+  @Patch('products/:productId/archive')
+  @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN)
+  @UseGuards(JwtGuard, TenantGuard, RolesGuard)
+  archiveProduct(@Param('restaurantId') restaurantId: string, @Param('productId') id: string) {
+    return this.catalog.archiveProduct(restaurantId, id);
   }
 }
 
@@ -143,6 +158,11 @@ export class MerchantCatalogController {
     return this.catalog.updateCategory(request.user.restaurantId, id, body);
   }
 
+  @Patch('categories/:categoryId/archive')
+  archiveCategory(@Req() request: MerchantRequest, @Param('categoryId') id: string) {
+    return this.catalog.archiveCategory(request.user.restaurantId, id);
+  }
+
   @Post('products')
   createProduct(@Req() request: MerchantRequest, @Body() body: CreateProductDto) {
     return this.catalog.createProduct(request.user.restaurantId, body);
@@ -156,6 +176,11 @@ export class MerchantCatalogController {
   @Patch('products/:productId')
   updateProduct(@Req() request: MerchantRequest, @Param('productId') id: string, @Body() body: UpdateProductDto) {
     return this.catalog.updateProduct(request.user.restaurantId, id, body);
+  }
+
+  @Patch('products/:productId/archive')
+  archiveProduct(@Req() request: MerchantRequest, @Param('productId') id: string) {
+    return this.catalog.archiveProduct(request.user.restaurantId, id);
   }
 }
 

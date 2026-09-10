@@ -8,8 +8,8 @@ const week = (isOpen) => Array.from({ length: 7 }, (_, dayOfWeek) => ({ dayOfWee
 function harness() {
   const openId = new Types.ObjectId(); const closedId = new Types.ObjectId();
   const restaurantsData = [
-    { _id: openId, name: 'Sempre aberta', slug: 'aberta', timezone: 'UTC' },
-    { _id: closedId, name: 'Fechada', slug: 'fechada', timezone: 'UTC' },
+    { _id: openId, name: 'Sempre aberta', slug: 'aberta', timezone: 'UTC', open: true, blocked: false },
+    { _id: closedId, name: 'Fechada', slug: 'fechada', timezone: 'UTC', open: true, blocked: false },
   ];
   const settingsData = [
     { restaurantId: openId, openingHours: week(true) },
@@ -23,7 +23,8 @@ function harness() {
     find: () => query(settingsData),
     findOne: ({ restaurantId }) => query(settingsData.find((item) => item.restaurantId.equals(restaurantId)) || null),
   };
-  return new RestaurantsService(restaurants, settings, {}, {}, {}, {});
+  const empty = { find: () => query([]) };
+  return new RestaurantsService(restaurants, settings, {}, {}, empty, empty, {}, {});
 }
 const params = { page: 1, limit: 12 };
 

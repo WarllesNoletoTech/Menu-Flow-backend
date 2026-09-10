@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
@@ -27,7 +27,7 @@ export class AuthService implements OnModuleInit {
     await this.create(name, email, password, Role.SUPER_ADMIN);
     this.logger.log('Initial SUPER_ADMIN created from development environment configuration.');
   }
-  async bootstrap(name: string, email: string, password: string) { if (await this.users.exists({})) throw new ConflictException('Bootstrap is only available before the first user'); return this.create(name, email, password, Role.SUPER_ADMIN); }
+  async bootstrap(name: string, email: string, password: string) { if (this.config.get<string>('NODE_ENV') === 'production') throw new ForbiddenException('Bootstrap is disabled in production. Use the administrative creation script.'); if (await this.users.exists({})) throw new ConflictException('Bootstrap is only available before the first user'); return this.create(name, email, password, Role.SUPER_ADMIN); }
   async create(name: string, email: string, password: string, role: Role, restaurantId?: string, phone?: string) {
     email = email.trim().toLowerCase();
     const requiresRestaurant = role === Role.RESTAURANT_ADMIN || role === Role.EMPLOYEE;

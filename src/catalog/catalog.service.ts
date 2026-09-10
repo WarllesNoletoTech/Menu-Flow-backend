@@ -36,29 +36,29 @@ export class CatalogService {
 
   categoriesFor(restaurantId: string) {
     const rid = this.restaurantObjectId(restaurantId);
-    return this.categories.find({ restaurantId: rid, active: true }).sort({ order: 1, _id: 1 }).lean();
+    return this.categories.find({ restaurantId: rid, active: true, archivedAt: { $exists: false } }).sort({ order: 1, _id: 1 }).lean();
   }
 
   productsFor(restaurantId: string) {
     const rid = this.restaurantObjectId(restaurantId);
-    return this.products.find({ restaurantId: rid, available: true }).sort({ order: 1, _id: 1 }).lean();
+    return this.products.find({ restaurantId: rid, available: true, archivedAt: { $exists: false } }).sort({ order: 1, _id: 1 }).lean();
   }
 
   manageCategories(restaurantId: string) {
     const rid = this.restaurantObjectId(restaurantId);
-    return this.categories.find({ restaurantId: rid }).sort({ order: 1, _id: 1 }).lean();
+    return this.categories.find({ restaurantId: rid, archivedAt: { $exists: false } }).sort({ order: 1, _id: 1 }).lean();
   }
 
   manageProducts(restaurantId: string) {
     const rid = this.restaurantObjectId(restaurantId);
-    return this.products.find({ restaurantId: rid }).sort({ categoryId: 1, order: 1, _id: 1 }).lean();
+    return this.products.find({ restaurantId: rid, archivedAt: { $exists: false } }).sort({ categoryId: 1, order: 1, _id: 1 }).lean();
   }
 
   async publicMenu(restaurantId: string) {
     const rid = this.restaurantObjectId(restaurantId);
-    const categories = await this.categories.find({ restaurantId: rid, active: true }).sort({ order: 1, _id: 1 }).lean();
+    const categories = await this.categories.find({ restaurantId: rid, active: true, archivedAt: { $exists: false } }).sort({ order: 1, _id: 1 }).lean();
     const products = await this.products
-      .find({ restaurantId: rid, available: true, categoryId: { $in: categories.map((category) => category._id) } })
+      .find({ restaurantId: rid, available: true, archivedAt: { $exists: false }, categoryId: { $in: categories.map((category) => category._id) } })
       .sort({ order: 1, _id: 1 })
       .lean();
     return { categories, products };
@@ -144,6 +144,34 @@ export class CatalogService {
     return updated;
   }
 
+  async archiveCategory(restaurantId: string, id: string) {
+    const rid = this.restaurantObjectId(restaurantId);
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Categoria não encontrada.');
+    const categoryId = new Types.ObjectId(id);
+    if (await this.products.exists({ restaurantId: rid, categoryId, archivedAt: { $exists: false } })) {
+      throw new ConflictException('A categoria possui produtos. Mova ou arquive os produtos antes de arquivá-la.');
+    }
+    const category = await this.categories.findOneAndUpdate(
+      { _id: categoryId, restaurantId: rid, archivedAt: { $exists: false } },
+      { $set: { active: false, archivedAt: new Date() } },
+      { new: true },
+    ).lean();
+    if (!category) throw new NotFoundException('Categoria não encontrada.');
+    return category;
+  }
+
+  async archiveProduct(restaurantId: string, id: string) {
+    const rid = this.restaurantObjectId(restaurantId);
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Produto não encontrado.');
+    const product = await this.products.findOneAndUpdate(
+      { _id: new Types.ObjectId(id), restaurantId: rid, archivedAt: { $exists: false } },
+      { $set: { available: false, archivedAt: new Date() } },
+      { new: true },
+    ).lean();
+    if (!product) throw new NotFoundException('Produto não encontrado.');
+    return product;
+  }
+
   reorderCategories(restaurantId: string, items: Array<{ id: string; order: number }>) {
     return this.reorder(this.categories, restaurantId, items);
   }
@@ -199,7 +227,7 @@ export class CatalogService {
     const nameFilter = { $regex: `^${escapeRegex(name)}$`, $options: 'i' };
     const duplicate = exceptId && Types.ObjectId.isValid(exceptId)
       ? await this.categories.exists({ restaurantId, name: nameFilter, _id: { $ne: new Types.ObjectId(exceptId) } })
-      : await this.categories.exists({ restaurantId, name: nameFilter });
+      : await this.categories.exists({ restaurantId, name: nameFilter, archivedAt: { $exists: false } });
     if (duplicate) throw new ConflictException('Já existe uma categoria com esse nome.');
   }
 

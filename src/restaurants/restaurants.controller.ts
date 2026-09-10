@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUrl, Matches, Max, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsEnum, IsIn, IsInt, IsMongoId, IsNumber, IsOptional, IsString, IsUrl, Matches, Max, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { JwtGuard } from '../auth/jwt.guard';
 import { Role } from '../common/roles';
 import { Roles, RolesGuard } from '../common/roles.guard';
@@ -37,6 +37,8 @@ class UpdateRestaurantDto extends CreateRestaurantDto {
 }
 
 class UpdateSettingsDto { @IsOptional() @IsNumber() @Min(0) minimumOrder?: number; @IsOptional() @IsNumber() @Min(0) preparationMinutes?: number; @IsOptional() @IsBoolean() rappidexEnabled?: boolean; }
+class DeliveryZoneDto { @IsOptional() @IsMongoId() id?: string; @IsString() @MinLength(1) name!: string; @IsNumber() @Min(0) fee!: number; @IsOptional() @IsBoolean() active?: boolean; }
+class PaymentMethodDto { @IsIn(['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD']) method!: string; @IsString() @MinLength(1) name!: string; @IsBoolean() active!: boolean; }
 class BusinessPeriodDto { @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) openTime!: string; @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) closeTime!: string; }
 class BusinessDayDto { @IsInt() @Min(0) @Max(6) dayOfWeek!: number; @IsBoolean() isOpen!: boolean; @IsArray() @ArrayMaxSize(12) @ValidateNested({ each: true }) @Type(() => BusinessPeriodDto) periods!: BusinessPeriodDto[]; }
 class BusinessHoursDto { @IsArray() @ArrayMinSize(7) @ArrayMaxSize(7) @ValidateNested({ each: true }) @Type(() => BusinessDayDto) days!: BusinessDayDto[]; }
@@ -59,13 +61,19 @@ export class RestaurantsController {
   @Get() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) list() { return this.restaurants.list(); }
   @Get('owner-integrity/diagnostic') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) ownerIntegrityDiagnostic() { return this.restaurants.ownerIntegrityDiagnostic(); }
   @Get('me') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
-  mine(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.ownerDetail(request.user.restaurantId); }
+  mine(@Req() request: { user: { restaurantId: string } }): Promise<Record<string, unknown>> { return this.restaurants.ownerDetail(request.user.restaurantId); }
   @Get('my-context') @Roles(Role.RESTAURANT_ADMIN, Role.EMPLOYEE) @UseGuards(JwtGuard, RolesGuard)
   myContext(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.memberContext(request.user.restaurantId); }
   @Patch('me') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   updateMine(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateRestaurantDto) { return this.restaurants.update(request.user.restaurantId, body, Role.RESTAURANT_ADMIN); }
   @Patch('me/settings') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   updateMySettings(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateSettingsDto) { return this.restaurants.updateSettings(request.user.restaurantId, body); }
+  @Get('me/operations') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  myOperations(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.operationalSettings(request.user.restaurantId); }
+  @Post('me/delivery-zones') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  saveMyDeliveryZone(@Req() request: { user: { restaurantId: string } }, @Body() body: DeliveryZoneDto) { return this.restaurants.saveDeliveryZone(request.user.restaurantId, body); }
+  @Patch('me/payment-methods') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  saveMyPaymentMethod(@Req() request: { user: { restaurantId: string } }, @Body() body: PaymentMethodDto) { return this.restaurants.savePaymentMethod(request.user.restaurantId, body); }
   @Get('me/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   myBusinessHours(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.businessHours(request.user.restaurantId); }
   @Patch('me/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)

@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Coupon, Customer, DeliveryZone, Order, Product, Restaurant, RestaurantSettings } from '../common/schemas';
+import { Coupon, Customer, DeliveryZone, Order, Payment, Product, Restaurant, RestaurantSettings } from '../common/schemas';
+import { canAcceptOrdersNow } from '../restaurants/business-hours';
 import { OrdersGateway } from './orders.gateway';
 
 export type CheckoutItem = { productId: string; quantity: number; addonNames?: string[]; observation?: string };
@@ -20,6 +21,7 @@ export class OrdersService {
     @InjectModel(Restaurant.name) private readonly restaurants: Model<Restaurant>,
     @InjectModel(RestaurantSettings.name) private readonly settings: Model<RestaurantSettings>,
     @InjectModel(Coupon.name) private readonly coupons: Model<Coupon>,
+    @InjectModel(Payment.name) private readonly payments: Model<Payment>,
     private readonly gateway: OrdersGateway,
   ) {}
 
@@ -30,7 +32,16 @@ export class OrdersService {
       this.settings.findOne({ restaurantId }).lean(),
     ]);
     if (!restaurant) throw new NotFoundException('Restaurant not found');
-    if (!restaurant.open) throw new BadRequestException('Restaurant is currently closed');
+    const availability = canAcceptOrdersNow({
+      blocked: restaurant.blocked,
+      acceptingOrders: restaurant.open,
+      openingHours: settings?.openingHours ?? [],
+      timezone: restaurant.timezone,
+    });
+    if (!availability.canAcceptOrdersNow) throw new BadRequestException('Restaurant is currently closed');
+    if (!(await this.payments.exists({ restaurantId, method: input.paymentMethod, active: true }))) {
+      throw new BadRequestException('Payment method is unavailable');
+    }
     if (input.fulfillment === 'DELIVERY' && !input.address?.neighborhood) {
       throw new BadRequestException('Neighborhood is required for delivery');
     }
@@ -39,7 +50,7 @@ export class OrdersService {
     }
     const productIds = input.items.map(({ productId }) => productId);
     if (productIds.some((id) => !Types.ObjectId.isValid(id))) throw new BadRequestException('Invalid product');
-    const products = await this.products.find({ _id: { $in: productIds }, restaurantId, available: true }).lean();
+    const products = await this.products.find({ _id: { $in: productIds }, restaurantId, available: true, archivedAt: { $exists: false } }).lean();
     if (products.length !== new Set(productIds).size) throw new BadRequestException('One or more products are unavailable');
     const productById = new Map(products.map((product) => [product._id.toString(), product]));
     const items = input.items.map((item) => {

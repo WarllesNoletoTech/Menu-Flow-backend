@@ -34,3 +34,17 @@ export function openingStatus(days: BusinessDay[], timezone: string, now = new D
   const openFromYesterday = Boolean(previous?.isOpen && previous.periods.some((period) => { const start = minutes(period.openTime); const end = minutes(period.closeTime); return end <= start && current < end; }));
   return { status: openToday || openFromYesterday ? 'OPEN' as const : 'CLOSED' as const, isOpen: openToday || openFromYesterday };
 }
+
+export function canAcceptOrdersNow(input: {
+  blocked: boolean;
+  acceptingOrders: boolean;
+  openingHours: BusinessDay[];
+  timezone?: string;
+  now?: Date;
+}) {
+  const schedule = openingStatus(input.openingHours, input.timezone || DEFAULT_TIMEZONE, input.now);
+  return {
+    canAcceptOrdersNow: !input.blocked && input.acceptingOrders && schedule.isOpen === true,
+    openingStatus: schedule,
+  };
+}

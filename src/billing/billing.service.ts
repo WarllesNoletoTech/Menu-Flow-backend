@@ -33,9 +33,17 @@ import {
 import {
   DEFAULT_BILLING_TIMEZONE,
   isFirstTuesday,
-  MENU_FLOW_ORDER_SERVICE_FEE_CENTS,
 } from "./billing-rules";
 import { renderBillingReportPdf } from "./billing-pdf";
+
+export function sumOrderServiceFees(
+  orders: Array<{ customerServiceFeeCents?: number }>,
+) {
+  return orders.reduce(
+    (total, order) => total + (order.customerServiceFeeCents ?? 0),
+    0,
+  );
+}
 
 @Injectable()
 export class BillingService {
@@ -117,8 +125,7 @@ export class BillingService {
       periodEnd,
       timezone: restaurant.timezone || DEFAULT_BILLING_TIMEZONE,
       orderCount: eligible.length,
-      serviceFeePerOrderCents: MENU_FLOW_ORDER_SERVICE_FEE_CENTS,
-      serviceFeeTotalCents: eligible.length * MENU_FLOW_ORDER_SERVICE_FEE_CENTS,
+      serviceFeeTotalCents: sumOrderServiceFees(eligible),
       alreadyBilledCount: allOrders.length - eligible.length,
       monthlyFeeAlreadyIncluded,
       suggestMonthlyFee: isFirstTuesday(
@@ -181,6 +188,7 @@ export class BillingService {
     const orders = allOrders.filter(
       (order) => !billedIds.has((order as any)._id.toString()),
     );
+    const serviceFeeTotalCents = sumOrderServiceFees(orders);
     const now = new Date(),
       reportNumber = await this.nextReportNumber(now),
       payment = await this.settings.findOne({ key: "global" }).lean();
@@ -191,11 +199,10 @@ export class BillingService {
       periodEnd,
       timezone: restaurant.timezone || DEFAULT_BILLING_TIMEZONE,
       orderCount: orders.length,
-      serviceFeePerOrderCents: MENU_FLOW_ORDER_SERVICE_FEE_CENTS,
-      serviceFeeTotalCents: orders.length * MENU_FLOW_ORDER_SERVICE_FEE_CENTS,
+      serviceFeeTotalCents,
       includeMonthlyFee: input.includeMonthlyFee,
       monthlyFeeCents: monthly,
-      totalCents: orders.length * MENU_FLOW_ORDER_SERVICE_FEE_CENTS + monthly,
+      totalCents: serviceFeeTotalCents + monthly,
       status: BillingReportStatus.GENERATED,
       generatedAt: now,
       generatedBy: new Types.ObjectId(actorId),
@@ -223,7 +230,7 @@ export class BillingService {
             completedAt: o.completedAt,
             fulfillment: o.fulfillment,
             orderTotalCents: o.totalCents ?? Math.round(o.total * 100),
-            feeCents: MENU_FLOW_ORDER_SERVICE_FEE_CENTS,
+            feeCents: o.customerServiceFeeCents ?? 0,
           })),
           { ordered: true },
         );
@@ -488,7 +495,9 @@ export class BillingService {
         status: "COMPLETED",
         completedAt: { $gte: start, $lte: end },
       })
-      .select("orderNumber completedAt fulfillment total totalCents")
+      .select(
+        "orderNumber completedAt fulfillment total totalCents customerServiceFeeCents",
+      )
       .sort({ completedAt: 1 })
       .lean();
   }

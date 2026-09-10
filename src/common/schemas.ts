@@ -190,6 +190,7 @@ export class Order {
   @Prop({ required: true, min: 0 }) subtotalCents!: number;
   @Prop({ default: 0 }) deliveryFee!: number;
   @Prop({ default: 0, min: 0 }) deliveryFeeCents!: number;
+  @Prop({ default: 0, min: 0 }) customerServiceFeeCents!: number;
   @Prop({ default: 0 }) discount!: number;
   @Prop({ default: 0, min: 0 }) discountCents!: number;
   @Prop({ required: true }) total!: number;
@@ -310,7 +311,6 @@ export class BillingReport {
   @Prop({ required: true }) periodEnd!: Date;
   @Prop({ required: true }) timezone!: string;
   @Prop({ required: true, min: 0 }) orderCount!: number;
-  @Prop({ required: true, min: 0 }) serviceFeePerOrderCents!: number;
   @Prop({ required: true, min: 0 }) serviceFeeTotalCents!: number;
   @Prop({ required: true }) includeMonthlyFee!: boolean;
   @Prop({ required: true, min: 0 }) monthlyFeeCents!: number;

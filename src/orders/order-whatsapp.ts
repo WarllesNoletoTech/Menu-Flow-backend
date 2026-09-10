@@ -11,6 +11,7 @@ export type WhatsAppOrder = {
   changeForCents?: number;
   subtotalCents: number;
   deliveryFeeCents: number;
+  customerServiceFeeCents?: number;
   discountCents: number;
   totalCents: number;
   items: Array<{
@@ -111,11 +112,12 @@ export function buildOrderWhatsAppMessage(
     "",
     `Subtotal: ${money(order.subtotalCents)}`,
     `Taxa de entrega: ${money(order.deliveryFeeCents)}`,
+    `Taxa de serviço Menu Flow: ${money(order.customerServiceFeeCents ?? 0)}`,
   );
   if (order.discountCents)
     lines.push(`Desconto: -${money(order.discountCents)}`);
   lines.push(
-    `Total: ${money(order.totalCents)}`,
+    `Total pago pelo cliente: ${money(order.totalCents)}`,
     "",
     "Status: Aguardando aceitação.",
   );

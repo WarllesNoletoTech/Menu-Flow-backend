@@ -6,7 +6,6 @@ type Report = {
   periodEnd: Date | string;
   generatedAt: Date | string;
   orderCount: number;
-  serviceFeePerOrderCents: number;
   serviceFeeTotalCents: number;
   includeMonthlyFee: boolean;
   monthlyFeeCents: number;
@@ -228,12 +227,13 @@ export function renderBillingReportPdf(
       y -= 22;
       line(y);
       y -= 22;
-      t(42, y, "Taxa de desenvolvimento / serviço Menu Flow", 12, true);
+      t(42, y, "TAXAS DE SERVIÇO / DESENVOLVIMENTO MENU FLOW", 12, true);
       y -= 15;
-      t(42, y, "Taxa referente aos pedidos concluídos no período.");
+      t(42, y, "Valores correspondentes às taxas de serviço Menu Flow cobradas dos");
+      y -= 12;
+      t(42, y, "clientes nos pedidos concluídos durante o período.");
       y -= 18;
       t(42, y, `Pedidos concluídos: ${report.orderCount}`);
-      t(210, y, `Valor unitário: ${money(report.serviceFeePerOrderCents)}`);
       t(410, y, `Subtotal: ${money(report.serviceFeeTotalCents)}`, 9, true);
       y -= 24;
     }
@@ -241,8 +241,8 @@ export function renderBillingReportPdf(
     t(142, y, "DATA", 8, true);
     t(215, y, "HORA", 8, true);
     t(270, y, "MODALIDADE", 8, true);
-    t(390, y, "VALOR DO PEDIDO", 8, true);
-    t(500, y, "TAXA", 8, true);
+    t(370, y, "VALOR PAGO PELO CLIENTE", 7, true);
+    t(510, y, "TAXA MENU FLOW", 7, true);
     y -= 8;
     line(y);
     y -= 14;
@@ -252,14 +252,14 @@ export function renderBillingReportPdf(
       t(215, y, time(i.completedAt, report.timezone), 8);
       t(270, y, i.fulfillment === "DELIVERY" ? "Entrega" : "Retirada", 8);
       t(390, y, money(i.orderTotalCents), 8);
-      t(500, y, money(i.feeCents), 8);
+      t(510, y, money(i.feeCents), 8);
       y -= 17;
     });
     if (page === pages - 1) {
       y = Math.max(y - 10, 190);
       line(y);
       y -= 22;
-      t(325, y, "Taxa de desenvolvimento", 10);
+      t(300, y, "Taxas Menu Flow cobradas nos pedidos", 9);
       t(485, y, money(report.serviceFeeTotalCents), 10, true);
       y -= 17;
       t(325, y, "Mensalidade Menu Flow", 10);

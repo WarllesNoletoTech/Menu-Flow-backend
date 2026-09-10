@@ -5,6 +5,10 @@ import { Order } from '../common/schemas';
 
 export type OrderMetrics = {
   completedOrders: number;
+  grossSalesCents: number;
+  menuFlowServiceFeesCollectedCents: number;
+  grossOrderVolumeCents: number;
+  /** @deprecated Use grossSalesCents. */
   grossRevenueCents: number;
   averageTicketCents: number;
   pendingOrders: number;
@@ -19,20 +23,25 @@ export class OrderMetricsService {
 
   async summarize(restaurantId: string | Types.ObjectId, start: Date, end: Date): Promise<OrderMetrics> {
     const rid = restaurantId instanceof Types.ObjectId ? restaurantId : objectId(restaurantId);
-    const rows = await this.orders.aggregate<{ _id: string; count: number; revenueCents: number }>([
+    const rows = await this.orders.aggregate<{ _id: string; count: number; grossOrderVolumeCents: number; serviceFeesCents: number }>([
       { $match: { restaurantId: rid, $or: [
         { status: 'COMPLETED', completedAt: { $gte: start, $lte: end } },
         { status: { $ne: 'COMPLETED' }, createdAt: { $gte: start, $lte: end } },
       ] } },
-      { $group: { _id: '$status', count: { $sum: 1 }, revenueCents: { $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, { $ifNull: ['$totalCents', { $round: [{ $multiply: [{ $ifNull: ['$total', 0] }, 100] }, 0] }] }, 0] } } } },
+      { $group: { _id: '$status', count: { $sum: 1 }, grossOrderVolumeCents: { $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, { $ifNull: ['$totalCents', { $round: [{ $multiply: [{ $ifNull: ['$total', 0] }, 100] }, 0] }] }, 0] } }, serviceFeesCents: { $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, { $ifNull: ['$customerServiceFeeCents', 0] }, 0] } } } },
     ]);
     const byStatus = new Map(rows.map((row) => [row._id, row]));
     const completedOrders = byStatus.get('COMPLETED')?.count ?? 0;
-    const grossRevenueCents = byStatus.get('COMPLETED')?.revenueCents ?? 0;
+    const grossOrderVolumeCents = byStatus.get('COMPLETED')?.grossOrderVolumeCents ?? 0;
+    const menuFlowServiceFeesCollectedCents = byStatus.get('COMPLETED')?.serviceFeesCents ?? 0;
+    const grossSalesCents = grossOrderVolumeCents - menuFlowServiceFeesCollectedCents;
     return {
       completedOrders,
-      grossRevenueCents,
-      averageTicketCents: completedOrders ? Math.round(grossRevenueCents / completedOrders) : 0,
+      grossSalesCents,
+      menuFlowServiceFeesCollectedCents,
+      grossOrderVolumeCents,
+      grossRevenueCents: grossSalesCents,
+      averageTicketCents: completedOrders ? Math.round(grossSalesCents / completedOrders) : 0,
       pendingOrders: byStatus.get('PENDING')?.count ?? 0,
       preparingOrders: byStatus.get('PREPARING')?.count ?? 0,
       readyOrders: byStatus.get('READY')?.count ?? 0,

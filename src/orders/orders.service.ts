@@ -23,6 +23,7 @@ import {
 import { canAcceptOrdersNow } from "../restaurants/business-hours";
 import { OrdersGateway } from "./orders.gateway";
 import { buildOrderWhatsAppMessage, buildWhatsAppUrl } from "./order-whatsapp";
+import { MENU_FLOW_ORDER_SERVICE_FEE_CENTS } from "../billing/billing-rules";
 
 export type CheckoutItem = {
   productId: string;
@@ -74,6 +75,20 @@ export function expectedChangeCents(
       "O valor para troco não pode ser menor que o total do pedido.",
     );
   return changeForCents! - totalCents;
+}
+
+export function calculateOrderTotalCents(
+  subtotalCents: number,
+  deliveryFeeCents: number,
+  discountCents: number,
+  customerServiceFeeCents: number,
+) {
+  return (
+    subtotalCents +
+    deliveryFeeCents -
+    discountCents +
+    customerServiceFeeCents
+  );
 }
 
 export function deliveryAddressSnapshot(
@@ -389,7 +404,15 @@ export class OrdersService {
       discountCents = Math.min(discountCents, subtotalCents);
       couponId = coupon._id;
     }
-    const totalCents = subtotalCents + deliveryFeeCents - discountCents;
+    // The backend defines the order's only Menu Flow fee and stores a snapshot.
+    // Values sent by checkout are intentionally not part of CheckoutInput.
+    const customerServiceFeeCents = MENU_FLOW_ORDER_SERVICE_FEE_CENTS;
+    const totalCents = calculateOrderTotalCents(
+      subtotalCents,
+      deliveryFeeCents,
+      discountCents,
+      customerServiceFeeCents,
+    );
     const needsChange =
       input.paymentMethod === "CASH" && Boolean(input.needsChange);
     const calculatedChangeCents = expectedChangeCents(
@@ -425,6 +448,7 @@ export class OrdersService {
             subtotalCents,
             deliveryFee: deliveryFeeCents / 100,
             deliveryFeeCents,
+            customerServiceFeeCents,
             discount: discountCents / 100,
             discountCents,
             total: totalCents / 100,

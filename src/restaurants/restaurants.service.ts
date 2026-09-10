@@ -2,14 +2,15 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import * as bcrypt from 'bcrypt';
-import { EstablishmentType, Restaurant, RestaurantDocument, RestaurantSettings, User, UserDocument } from '../common/schemas';
+import { AuditLog, BusinessDay, EstablishmentType, Restaurant, RestaurantDocument, RestaurantSettings, User, UserDocument } from '../common/schemas';
 import { Role } from '../common/roles';
 import { AuthService } from '../auth/auth.service';
 import { LocationsService } from '../locations/locations.service';
+import { DEFAULT_TIMEZONE, openingStatus, validateBusinessHours } from './business-hours';
 
 @Injectable()
 export class RestaurantsService {
-  constructor(@InjectModel(Restaurant.name) private readonly restaurants: Model<RestaurantDocument>, @InjectModel(RestaurantSettings.name) private readonly settings: Model<RestaurantSettings>, @InjectModel(User.name) private readonly users: Model<UserDocument>, private readonly auth: AuthService, private readonly locations: LocationsService) {}
+  constructor(@InjectModel(Restaurant.name) private readonly restaurants: Model<RestaurantDocument>, @InjectModel(RestaurantSettings.name) private readonly settings: Model<RestaurantSettings>, @InjectModel(User.name) private readonly users: Model<UserDocument>, @InjectModel(AuditLog.name) private readonly audits: Model<AuditLog>, private readonly auth: AuthService, private readonly locations: LocationsService) {}
 
   async create(input: Pick<Restaurant, 'name' | 'slug'> & Partial<Restaurant>) {
     try {
@@ -223,10 +224,12 @@ export class RestaurantsService {
     return { items: items.map(withDefaultType), pagination: { page: query.page, limit: query.limit, total, pages: Math.ceil(total / query.limit) } };
   }
 
-  async bySlug(slug: string) { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state logoUrl bannerUrl description phone whatsapp instagram establishmentType restaurantCategories open').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); return withDefaultType(restaurant); }
+  async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state logoUrl bannerUrl description phone whatsapp instagram establishmentType restaurantCategories timezone').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const settings = await this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours').lean(); const businessHours = settings?.openingHours ?? []; return { ...withDefaultType(restaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, businessHours, openingStatus: openingStatus(businessHours, restaurant.timezone || DEFAULT_TIMEZONE) }; }
   async ensureAcceptingOrders(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found'); const restaurant = await this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(); if (!restaurant) throw new NotFoundException('Restaurant not found'); const settings = await this.settings.findOne({ restaurantId }).lean(); return { restaurant, settings }; }
   async update(id: string, input: Partial<Restaurant>, actorRole: Role) { if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
   async updateSettings(id: string, input: Partial<RestaurantSettings>) { const settings = await this.settings.findOneAndUpdate({ restaurantId: id }, input, { new: true, runValidators: true }); if (!settings) throw new NotFoundException('Restaurant settings not found'); return settings; }
+  async businessHours(id: string): Promise<Record<string, unknown>> { await this.ensureRestaurant(id); const [restaurant, settings] = await Promise.all([this.restaurants.findById(id).select('name timezone').lean(), this.settings.findOne({ restaurantId: id }).lean()]); return { restaurantId: id, restaurantName: restaurant!.name, timezone: restaurant!.timezone || DEFAULT_TIMEZONE, configured: Boolean(settings?.openingHours?.length), days: settings?.openingHours ?? [] }; }
+  async updateBusinessHours(id: string, days: BusinessDay[], actorId: string, admin: boolean): Promise<Record<string, unknown>> { await this.ensureRestaurant(id); const normalized = validateBusinessHours(days); const settings = await this.settings.findOneAndUpdate({ restaurantId: id }, { $set: { openingHours: normalized }, $setOnInsert: { restaurantId: new Types.ObjectId(id) } }, { new: true, upsert: true, runValidators: true }); if (admin) await this.audits.create({ actorId: new Types.ObjectId(actorId), action: 'BUSINESS_HOURS_UPDATED', targetType: 'Restaurant', targetId: new Types.ObjectId(id), metadata: { periods: normalized.reduce((sum, day) => sum + day.periods.length, 0) } }); return { restaurantId: id, timezone: (await this.restaurants.findById(id).select('timezone').lean())?.timezone || DEFAULT_TIMEZONE, configured: true, days: settings.openingHours }; }
 
   private async validateLocation(state?: string, city?: string) {
     if (!state || !city) throw new BadRequestException('Estado e cidade válidos são obrigatórios.');

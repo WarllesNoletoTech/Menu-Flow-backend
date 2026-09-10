@@ -13,7 +13,9 @@
     "lint": "tsc --noEmit",
     "start": "node dist/main",
     "start:prod": "node dist/main",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "migrate:business-hours": "npm run build && node dist/scripts/migrate-business-hours.js",
+    "test": "npm run build && node --test test/*.test.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

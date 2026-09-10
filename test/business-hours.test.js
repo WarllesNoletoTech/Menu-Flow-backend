@@ -1,0 +1,6 @@
+const test=require('node:test');const assert=require('node:assert/strict');const{openingStatus,validateBusinessHours}=require('../dist/restaurants/business-hours');
+const week=()=>Array.from({length:7},(_,dayOfWeek)=>({dayOfWeek,isOpen:false,periods:[]}));
+test('reports unconfigured safely',()=>assert.deepEqual(openingStatus([],'America/Sao_Paulo'),{status:'UNCONFIGURED',isOpen:null}));
+test('supports two periods and closed interval',()=>{const days=week();days[1]={dayOfWeek:1,isOpen:true,periods:[{openTime:'11:00',closeTime:'14:00'},{openTime:'18:00',closeTime:'23:00'}]};assert.equal(openingStatus(days,'UTC',new Date('2026-09-14T13:00:00Z')).status,'OPEN');assert.equal(openingStatus(days,'UTC',new Date('2026-09-14T16:00:00Z')).status,'CLOSED');assert.equal(openingStatus(days,'UTC',new Date('2026-09-14T20:00:00Z')).status,'OPEN')});
+test('carries an overnight period into the following day',()=>{const days=week();days[6]={dayOfWeek:6,isOpen:true,periods:[{openTime:'18:00',closeTime:'02:00'}]};assert.equal(openingStatus(days,'UTC',new Date('2026-09-13T01:00:00Z')).status,'OPEN')});
+test('rejects overlapping periods',()=>{const days=week();days[1]={dayOfWeek:1,isOpen:true,periods:[{openTime:'08:00',closeTime:'14:00'},{openTime:'13:00',closeTime:'18:00'}]};assert.throws(()=>validateBusinessHours(days),/sobrepostos/)})

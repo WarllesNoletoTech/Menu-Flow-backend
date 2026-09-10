@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEmail, IsEnum, IsNumber, IsOptional, IsString, IsUrl, Matches, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUrl, Matches, Max, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { JwtGuard } from '../auth/jwt.guard';
 import { Role } from '../common/roles';
 import { Roles, RolesGuard } from '../common/roles.guard';
@@ -37,6 +37,9 @@ class UpdateRestaurantDto extends CreateRestaurantDto {
 }
 
 class UpdateSettingsDto { @IsOptional() @IsNumber() @Min(0) minimumOrder?: number; @IsOptional() @IsNumber() @Min(0) preparationMinutes?: number; @IsOptional() @IsBoolean() rappidexEnabled?: boolean; }
+class BusinessPeriodDto { @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) openTime!: string; @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) closeTime!: string; }
+class BusinessDayDto { @IsInt() @Min(0) @Max(6) dayOfWeek!: number; @IsBoolean() isOpen!: boolean; @IsArray() @ArrayMaxSize(12) @ValidateNested({ each: true }) @Type(() => BusinessPeriodDto) periods!: BusinessPeriodDto[]; }
+class BusinessHoursDto { @IsArray() @ArrayMinSize(7) @ArrayMaxSize(7) @ValidateNested({ each: true }) @Type(() => BusinessDayDto) days!: BusinessDayDto[]; }
 class OwnerDto { @IsString() @MinLength(1) name!: string; @IsEmail() email!: string; @IsOptional() @IsString() phone?: string; @IsString() @MinLength(8) password!: string; }
 class EmployeeDto extends OwnerDto {}
 class UpdateStoreUserDto {
@@ -63,6 +66,10 @@ export class RestaurantsController {
   updateMine(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateRestaurantDto) { return this.restaurants.update(request.user.restaurantId, body, Role.RESTAURANT_ADMIN); }
   @Patch('me/settings') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   updateMySettings(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateSettingsDto) { return this.restaurants.updateSettings(request.user.restaurantId, body); }
+  @Get('me/business-hours') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  myBusinessHours(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.businessHours(request.user.restaurantId); }
+  @Patch('me/business-hours') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  updateMyBusinessHours(@Req() request: { user: { sub: string; restaurantId: string } }, @Body() body: BusinessHoursDto) { return this.restaurants.updateBusinessHours(request.user.restaurantId, body.days, request.user.sub, false); }
   @Get('me/users') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   myUsers(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.employeesForRestaurant(request.user.restaurantId); }
   @Post('me/users') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
@@ -74,6 +81,8 @@ export class RestaurantsController {
   @Post() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) create(@Body() body: CreateRestaurantDto) { return this.restaurants.create(body); }
   @Post('with-admin') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) createWithOwner(@Body() body: EstablishmentWithOwnerDto) { return this.restaurants.createWithOwner(body.establishment as Required<Pick<CreateRestaurantDto, 'name' | 'slug' | 'city' | 'state' | 'establishmentType'>> & CreateRestaurantDto, body.owner); }
   @Get(':restaurantId/admin-detail') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) adminDetail(@Param('restaurantId') id: string) { return this.restaurants.adminDetail(id); }
+  @Get(':restaurantId/business-hours') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) businessHours(@Param('restaurantId') id: string) { return this.restaurants.businessHours(id); }
+  @Patch(':restaurantId/business-hours') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateBusinessHours(@Param('restaurantId') id: string, @Req() request: { user: { sub: string } }, @Body() body: BusinessHoursDto) { return this.restaurants.updateBusinessHours(id, body.days, request.user.sub, true); }
   @Patch(':restaurantId/with-owner') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateWithOwner(@Param('restaurantId') id: string, @Body() body: UpdateWithOwnerDto) { return this.restaurants.updateWithOwner(id, body.establishment, body.owner); }
   @Post(':restaurantId/owners') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) addOwner(@Param('restaurantId') id: string, @Body() body: OwnerDto) { return this.restaurants.addOwner(id, body); }
   @Post(':restaurantId/employees') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) addEmployee(@Param('restaurantId') id: string, @Body() body: EmployeeDto) { return this.restaurants.addEmployee(id, body); }
@@ -82,5 +91,5 @@ export class RestaurantsController {
   @Delete(':restaurantId/employees/:userId') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) deleteEmployee(@Param('restaurantId') restaurantId: string, @Param('userId') userId: string) { return this.restaurants.deleteEmployee(restaurantId, userId); }
   @Patch(':restaurantId') @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) update(@Param('restaurantId') id: string, @Body() body: UpdateRestaurantDto, @Req() request: { user: { role: Role } }) { return this.restaurants.update(id, body, request.user.role); }
   @Patch(':restaurantId/settings') @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) updateSettings(@Param('restaurantId') id: string, @Body() body: UpdateSettingsDto) { return this.restaurants.updateSettings(id, body); }
-  @Get(':slug') find(@Param('slug') slug: string) { return this.restaurants.bySlug(slug); }
+  @Get(':slug') find(@Param('slug') slug: string): Promise<Record<string, unknown>> { return this.restaurants.bySlug(slug); }
 }

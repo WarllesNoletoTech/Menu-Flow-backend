@@ -10,7 +10,7 @@ function harness(plan) {
   const restaurant = { _id: restaurantId, name: 'Teste', timezone: 'America/Sao_Paulo', ...(plan ? { billingPlanId: plan } : {}) };
   const restaurants = { findById(id) { assert.ok(id instanceof Types.ObjectId); return query(restaurant); } };
   const metrics = { countCompleted(id, start, end) { filters.push({ id, start, end }); return Promise.resolve(1); } };
-  return { service: new BillingService({}, {}, {}, {}, restaurants, {}, {}, metrics), restaurantId, filters };
+  return { service: new BillingService({}, {}, {}, {}, {}, {}, restaurants, {}, {}, metrics), restaurantId, filters };
 }
 
 test('completed order is counted even when restaurant has no billing plan', async () => {

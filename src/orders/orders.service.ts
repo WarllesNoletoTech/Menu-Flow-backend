@@ -32,8 +32,9 @@ export class OrdersService {
 
   async create(restaurantId: string, input: CheckoutInput, customerId?: string, idempotencyKey?: string) {
     if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Estabelecimento não encontrado.');
-    if (idempotencyKey) { const existing = await this.orders.findOne({ restaurantId, idempotencyKey }).lean(); if (existing) return existing; }
     const rid = new Types.ObjectId(restaurantId);
+    const authenticatedCustomerId = customerId ? this.objectId(customerId, 'Cliente autenticado inválido.') : undefined;
+    if (idempotencyKey) { const existing = await this.orders.findOne({ restaurantId: rid, idempotencyKey }).lean(); if (existing) return existing; }
     const [restaurant, settings] = await Promise.all([this.restaurants.findById(rid).lean(), this.settings.findOne({ restaurantId: rid }).lean()]);
     if (!restaurant || restaurant.blocked) throw new NotFoundException('Estabelecimento não encontrado.');
     const availability = canAcceptOrdersNow({ blocked: restaurant.blocked, acceptingOrders: restaurant.open, openingHours: settings?.openingHours ?? [], timezone: restaurant.timezone });
@@ -91,15 +92,17 @@ export class OrdersService {
     const calculatedChangeCents = expectedChangeCents(input.paymentMethod, input.needsChange, input.changeForCents, totalCents);
     const publicToken = randomBytes(32).toString('base64url');
     try {
-      const order = await this.orders.create({ restaurantId: rid, customerId: customerId ? new Types.ObjectId(customerId) : undefined, idempotencyKey, publicToken, orderNumber: `MF-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`, customerName: input.customerName.trim(), phone: input.phone.trim(), fulfillment: input.fulfillment, address: input.fulfillment === 'DELIVERY' ? input.address : undefined, paymentMethod: input.paymentMethod, needsChange, changeForCents: needsChange ? input.changeForCents : undefined, changeFor: needsChange ? input.changeForCents! / 100 : undefined, expectedChangeCents: calculatedChangeCents, items, subtotal: subtotalCents / 100, subtotalCents, deliveryFee: deliveryFeeCents / 100, deliveryFeeCents, discount: discountCents / 100, discountCents, total: totalCents / 100, totalCents, status: 'PENDING', statusHistory: [{ status: 'PENDING', changedAt: new Date(), ...(customerId ? { changedBy: new Types.ObjectId(customerId) } : {}) }] });
+      // customerId links "Meus pedidos" to the authenticated User CUSTOMER.
+      // The restaurant-scoped Customer document below remains CRM data and must not replace it.
+      const order = await this.orders.create({ restaurantId: rid, customerId: authenticatedCustomerId, idempotencyKey, publicToken, orderNumber: `MF-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`, customerName: input.customerName.trim(), phone: input.phone.trim(), fulfillment: input.fulfillment, address: input.fulfillment === 'DELIVERY' ? input.address : undefined, paymentMethod: input.paymentMethod, needsChange, changeForCents: needsChange ? input.changeForCents : undefined, changeFor: needsChange ? input.changeForCents! / 100 : undefined, expectedChangeCents: calculatedChangeCents, items, subtotal: subtotalCents / 100, subtotalCents, deliveryFee: deliveryFeeCents / 100, deliveryFeeCents, discount: discountCents / 100, discountCents, total: totalCents / 100, totalCents, status: 'PENDING', statusHistory: [{ status: 'PENDING', changedAt: new Date(), ...(authenticatedCustomerId ? { changedBy: authenticatedCustomerId } : {}) }] });
       if (couponId) await this.consumeCoupon(couponId, order._id);
       await this.customers.findOneAndUpdate({ restaurantId: rid, phone: input.phone.trim() }, { $set: { name: input.customerName.trim(), lastOrderAt: new Date() }, ...(input.address ? { $addToSet: { addresses: input.address } } : {}), $inc: { orderCount: 1, totalSpent: totalCents / 100 } }, { upsert: true });
-      this.gateway.publishNewOrder(restaurantId, order.toJSON()); return order;
+      this.gateway.publishNewOrder(rid.toHexString(), order.toJSON()); return order;
     } catch (error) { if ((error as { code?: number }).code === 11000 && idempotencyKey) { const existing = await this.orders.findOne({ restaurantId: rid, idempotencyKey }).lean(); if (existing) return existing; } throw error; }
   }
 
-  list(restaurantId: string) { return this.orders.find({ restaurantId }).sort({ createdAt: -1 }).limit(200).lean(); }
-  forCustomer(customerId: string) { return this.orders.find({ customerId }).populate('restaurantId', 'name tradeName slug address mapUrl').sort({ createdAt: -1 }).limit(100).lean(); }
+  list(restaurantId: string) { const rid = this.objectId(restaurantId, 'Estabelecimento inválido.'); return this.orders.find({ restaurantId: rid }).sort({ createdAt: -1 }).limit(200).lean(); }
+  forCustomer(customerId: string) { const uid = this.objectId(customerId, 'Cliente inválido.'); return this.orders.find({ customerId: uid }).populate('restaurantId', 'name tradeName slug address mapUrl').sort({ createdAt: -1 }).limit(100).lean(); }
   async publicOrder(orderNumber: string, token: string) { const order = await this.orders.findOne({ orderNumber, publicToken: token }).populate('restaurantId', 'name tradeName slug address mapUrl').lean(); if (!order) throw new NotFoundException('Pedido não encontrado.'); return order; }
   async updateStatus(restaurantId: string, id: string, status: string, actorId: string, reason?: string) {
     if (!Types.ObjectId.isValid(restaurantId) || !Types.ObjectId.isValid(id)) throw new NotFoundException('Pedido não encontrado.');
@@ -114,6 +117,7 @@ export class OrdersService {
   async cancelByCustomer(customerId: string, id: string, reason?: string) { const order = await this.orders.findOne({ _id: id, customerId }); if (!order) throw new NotFoundException('Pedido não encontrado.'); if (order.status !== 'PENDING') throw new ConflictException('Após a aceitação, entre em contato com o estabelecimento.'); return this.updateStatus(order.restaurantId.toString(), id, 'CANCELLED', customerId, reason); }
 
   private validateAddress(address?: Record<string, string>) { for (const field of ['zipCode', 'street', 'number', 'neighborhood', 'city', 'state']) if (!address?.[field]?.trim()) throw new BadRequestException('Preencha o endereço completo para entrega.'); }
+  private objectId(value: string, message: string) { if (!Types.ObjectId.isValid(value)) throw new BadRequestException(message); return new Types.ObjectId(value); }
   private legacySelections(product: any, names: string[]) { return names.map((name) => { const matches = product.addonGroups.flatMap((group: any) => group.addons.filter((addon: any) => addon.name === name).map((addon: any) => ({ groupId: group._id?.toString(), addonId: addon._id?.toString() }))); if (matches.length !== 1 || !matches[0].groupId || !matches[0].addonId) throw new BadRequestException('Adicional antigo ambíguo. Selecione novamente.'); return matches[0]; }); }
   private async validCoupon(rid: Types.ObjectId, code: string, subtotalCents: number): Promise<any> { const now = new Date(); const coupon = await this.coupons.findOne({ restaurantId: rid, code: code.toUpperCase(), active: true, $and: [{ $or: [{ startsAt: { $exists: false } }, { startsAt: { $lte: now } }] }, { $or: [{ endsAt: { $exists: false } }, { endsAt: { $gte: now } }] }] }).lean(); if (!coupon || subtotalCents < Math.round(coupon.minimumOrder * 100) || (coupon.usageLimit !== undefined && coupon.usageCount >= coupon.usageLimit)) throw new BadRequestException('Cupom inválido.'); return coupon; }
   private async consumeCoupon(id: Types.ObjectId, orderId: Types.ObjectId) { const used = await this.coupons.updateOne({ _id: id, $or: [{ usageLimit: { $exists: false } }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }] }, { $inc: { usageCount: 1 } }); if (used.modifiedCount !== 1) { await this.orders.deleteOne({ _id: orderId }); throw new BadRequestException('O limite do cupom foi atingido.'); } }

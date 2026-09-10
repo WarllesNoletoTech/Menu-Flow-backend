@@ -30,7 +30,7 @@ export function openingStatus(days: BusinessDay[], timezone: string, now = new D
   const day = weekdays[value.weekday]; const current = Number(value.hour) * 60 + Number(value.minute);
   const today = days.find((item) => item.dayOfWeek === day);
   const previous = days.find((item) => item.dayOfWeek === (day + 6) % 7);
-  const openToday = Boolean(today?.isOpen && today.periods.some((period) => { const start = minutes(period.openTime); const end = minutes(period.closeTime); return end > start && current >= start && current < end; }));
+  const openToday = Boolean(today?.isOpen && today.periods.some((period) => { const start = minutes(period.openTime); const end = minutes(period.closeTime); return end > start ? current >= start && current < end : current >= start; }));
   const openFromYesterday = Boolean(previous?.isOpen && previous.periods.some((period) => { const start = minutes(period.openTime); const end = minutes(period.closeTime); return end <= start && current < end; }));
   return { status: openToday || openFromYesterday ? 'OPEN' as const : 'CLOSED' as const, isOpen: openToday || openFromYesterday };
 }

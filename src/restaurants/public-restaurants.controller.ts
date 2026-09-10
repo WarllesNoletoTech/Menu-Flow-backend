@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Header, Query } from '@nestjs/common';
 import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { EstablishmentType } from '../common/schemas';
@@ -18,6 +18,6 @@ class PublicRestaurantsQuery {
 export class PublicRestaurantsController {
   constructor(private readonly restaurants: RestaurantsService) {}
   @Get('cities') cities() { return this.restaurants.publicCities(); }
-  @Get('restaurants') list(@Query() query: PublicRestaurantsQuery) { return this.restaurants.publicList(query); }
-  @Get('establishments') establishments(@Query() query: PublicRestaurantsQuery) { return this.restaurants.publicList(query); }
+  @Get('restaurants') @Header('Cache-Control', 'no-store') list(@Query() query: PublicRestaurantsQuery): Promise<Record<string, unknown>> { return this.restaurants.publicList(query); }
+  @Get('establishments') @Header('Cache-Control', 'no-store') establishments(@Query() query: PublicRestaurantsQuery): Promise<Record<string, unknown>> { return this.restaurants.publicList(query); }
 }

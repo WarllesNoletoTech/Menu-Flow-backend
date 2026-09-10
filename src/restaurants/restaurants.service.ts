@@ -205,11 +205,10 @@ export class RestaurantsService {
     ]);
   }
 
-  async publicList(query: { city?: string; state?: string; search?: string; type?: EstablishmentType; open?: boolean; page: number; limit: number }) {
+  async publicList(query: { city?: string; state?: string; search?: string; type?: EstablishmentType; open?: boolean; page: number; limit: number }): Promise<Record<string, unknown>> {
     const filter: FilterQuery<RestaurantDocument> = { blocked: false };
     if (query.city) filter.city = new RegExp(`^${escapeRegExp(query.city.trim())}$`, 'i');
     if (query.state) filter.state = new RegExp(`^${escapeRegExp(query.state.trim())}$`, 'i');
-    if (query.open !== undefined) filter.open = query.open;
     if (query.type === EstablishmentType.RESTAURANT) filter.$and = [{ $or: [{ establishmentType: EstablishmentType.RESTAURANT }, { establishmentType: { $exists: false } }] }];
     else if (query.type) filter.establishmentType = query.type;
     if (query.search?.trim()) {
@@ -217,15 +216,21 @@ export class RestaurantsService {
       const inferredType = typeForSearch(query.search);
       filter.$or = [{ name: search }, { tradeName: search }, { description: search }, { restaurantCategories: search }, ...(inferredType ? [{ establishmentType: inferredType }] : [])];
     }
-    const select = 'name slug tradeName city state logoUrl bannerUrl description establishmentType restaurantCategories open';
-    const [items, total] = await Promise.all([
-      this.restaurants.find(filter).select(select).sort({ open: -1, name: 1 }).skip((query.page - 1) * query.limit).limit(query.limit).lean(),
-      this.restaurants.countDocuments(filter),
-    ]);
-    return { items: items.map(withDefaultType), pagination: { page: query.page, limit: query.limit, total, pages: Math.ceil(total / query.limit) } };
+    const select = 'name slug tradeName city state logoUrl bannerUrl description establishmentType restaurantCategories timezone';
+    const restaurants = await this.restaurants.find(filter).select(select).sort({ name: 1 }).lean();
+    const settings = await this.settings.find({ restaurantId: { $in: restaurants.map((restaurant) => restaurant._id) } }).select('restaurantId openingHours').lean();
+    const hoursByRestaurant = new Map(settings.map((item) => [item.restaurantId.toString(), item.openingHours ?? []]));
+    const withAvailability = restaurants.map((restaurant) => {
+      const businessHours = hoursByRestaurant.get(restaurant._id.toString()) ?? [];
+      return { ...withDefaultType(restaurant), ...restaurantAvailability(businessHours, restaurant.timezone) };
+    });
+    const filtered = query.open === undefined ? withAvailability : withAvailability.filter((restaurant) => restaurant.isOpenNow === query.open);
+    const total = filtered.length;
+    const start = (query.page - 1) * query.limit;
+    return { items: filtered.slice(start, start + query.limit), pagination: { page: query.page, limit: query.limit, total, pages: Math.ceil(total / query.limit) } };
   }
 
-  async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state logoUrl bannerUrl description phone whatsapp instagram establishmentType restaurantCategories timezone').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const settings = await this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours').lean(); const businessHours = settings?.openingHours ?? []; return { ...withDefaultType(restaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, businessHours, openingStatus: openingStatus(businessHours, restaurant.timezone || DEFAULT_TIMEZONE) }; }
+  async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state logoUrl bannerUrl description phone whatsapp instagram establishmentType restaurantCategories timezone').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const settings = await this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours').lean(); const businessHours = settings?.openingHours ?? []; return { ...withDefaultType(restaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, ...restaurantAvailability(businessHours, restaurant.timezone) }; }
   async ensureAcceptingOrders(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found'); const restaurant = await this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(); if (!restaurant) throw new NotFoundException('Restaurant not found'); const settings = await this.settings.findOne({ restaurantId }).lean(); return { restaurant, settings }; }
   async update(id: string, input: Partial<Restaurant>, actorRole: Role) { if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
   async updateSettings(id: string, input: Partial<RestaurantSettings>) { const settings = await this.settings.findOneAndUpdate({ restaurantId: id }, input, { new: true, runValidators: true }); if (!settings) throw new NotFoundException('Restaurant settings not found'); return settings; }
@@ -310,6 +315,16 @@ function storeUserSummary(user: { _id: Types.ObjectId; name: string; email: stri
 function escapeRegExp(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function withDefaultType<T extends { establishmentType?: EstablishmentType }>(item: T): T & { establishmentType: EstablishmentType } { return { ...item, establishmentType: item.establishmentType ?? EstablishmentType.RESTAURANT }; }
 function typeForSearch(value: string) { const normalized = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); if (/farmacia/.test(normalized)) return EstablishmentType.PHARMACY; if (/roupa|vestuario/.test(normalized)) return EstablishmentType.CLOTHING; if (/restaurante/.test(normalized)) return EstablishmentType.RESTAURANT; return undefined; }
+
+function restaurantAvailability(businessHours: BusinessDay[], timezone?: string) {
+  const current = openingStatus(businessHours, timezone || DEFAULT_TIMEZONE);
+  return {
+    businessHours,
+    businessHoursConfigured: current.status !== 'UNCONFIGURED',
+    isOpenNow: current.isOpen === true,
+    openingStatus: current,
+  };
+}
 
 function updateDocument(input: Partial<Restaurant>, clearable: Array<keyof Restaurant>) {
   const set: Record<string, unknown> = {};

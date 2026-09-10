@@ -91,5 +91,5 @@ export class RestaurantsController {
   @Delete(':restaurantId/employees/:userId') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) deleteEmployee(@Param('restaurantId') restaurantId: string, @Param('userId') userId: string) { return this.restaurants.deleteEmployee(restaurantId, userId); }
   @Patch(':restaurantId') @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) update(@Param('restaurantId') id: string, @Body() body: UpdateRestaurantDto, @Req() request: { user: { role: Role } }) { return this.restaurants.update(id, body, request.user.role); }
   @Patch(':restaurantId/settings') @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) updateSettings(@Param('restaurantId') id: string, @Body() body: UpdateSettingsDto) { return this.restaurants.updateSettings(id, body); }
-  @Get(':slug') find(@Param('slug') slug: string): Promise<Record<string, unknown>> { return this.restaurants.bySlug(slug); }
+  @Get(':slug') @Header('Cache-Control', 'no-store') find(@Param('slug') slug: string): Promise<Record<string, unknown>> { return this.restaurants.bySlug(slug); }
 }

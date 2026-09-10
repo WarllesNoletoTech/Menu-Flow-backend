@@ -54,10 +54,12 @@ export const AuditLogSchema = SchemaFactory.createForClass(AuditLog); AuditLogSc
 export const CustomerSchema = SchemaFactory.createForClass(Customer); CustomerSchema.index({ restaurantId: 1, phone: 1 }, { unique: true });
 @Schema({ timestamps: true }) export class Coupon { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true, uppercase: true, trim: true }) code!: string; @Prop({ enum: ['FIXED', 'PERCENTAGE'], required: true }) type!: string; @Prop({ required: true }) value!: number; @Prop({ default: 0 }) minimumOrder!: number; @Prop() startsAt?: Date; @Prop() endsAt?: Date; @Prop() usageLimit?: number; @Prop({ default: 0 }) usageCount!: number; @Prop({ default: true }) active!: boolean; }
 export const CouponSchema = SchemaFactory.createForClass(Coupon); CouponSchema.index({ restaurantId: 1, code: 1 }, { unique: true });
-@Schema({ timestamps: true }) export class DeliveryZone { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true }) name!: string; @Prop({ required: true, min: 0 }) fee!: number; @Prop({ min: 0 }) feeCents?: number; @Prop({ default: true }) active!: boolean; }
+export enum DeliveryCoverageType { ALL = 'ALL', SPECIFIC = 'SPECIFIC' }
+@Schema({ timestamps: true }) export class DeliveryZone { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true }) name!: string; @Prop({ enum: DeliveryCoverageType, default: DeliveryCoverageType.SPECIFIC, index: true }) coverageType!: DeliveryCoverageType; @Prop({ required: true, min: 0 }) fee!: number; @Prop({ min: 0 }) feeCents?: number; @Prop({ default: true }) active!: boolean; }
 export const DeliveryZoneSchema = SchemaFactory.createForClass(DeliveryZone);
 DeliveryZoneSchema.index({ restaurantId: 1, name: 1 }, { unique: true });
 DeliveryZoneSchema.index({ restaurantId: 1, active: 1 });
+DeliveryZoneSchema.index({ restaurantId: 1, coverageType: 1, active: 1 });
 @Schema({ timestamps: true }) export class Payment { @Prop({ type: Types.ObjectId, ref: 'Restaurant', required: true, index: true }) restaurantId!: Types.ObjectId; @Prop({ required: true }) name!: string; @Prop({ enum: ['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD'], required: true }) method!: string; @Prop({ default: true }) active!: boolean; }
 export const PaymentSchema = SchemaFactory.createForClass(Payment);
 PaymentSchema.index({ restaurantId: 1, method: 1 }, { unique: true });

@@ -20,7 +20,9 @@
     "check:order-links": "npm run build && node dist/scripts/migrate-order-links.js",
     "migrate:order-links": "npm run build && node dist/scripts/migrate-order-links.js --apply",
     "check:integration-contracts": "npm run build && node dist/scripts/migrate-integration-contracts.js",
-    "migrate:integration-contracts": "npm run build && node dist/scripts/migrate-integration-contracts.js --apply"
+    "migrate:integration-contracts": "npm run build && node dist/scripts/migrate-integration-contracts.js --apply",
+    "check:delivery-coverage": "npm run build && node dist/scripts/migrate-delivery-coverage.js",
+    "migrate:delivery-coverage": "npm run build && node dist/scripts/migrate-delivery-coverage.js --apply"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

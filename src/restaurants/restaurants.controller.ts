@@ -4,7 +4,7 @@ import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsEnum, IsIn, 
 import { JwtGuard } from '../auth/jwt.guard';
 import { Role } from '../common/roles';
 import { Roles, RolesGuard } from '../common/roles.guard';
-import { EstablishmentType } from '../common/schemas';
+import { DeliveryCoverageType, EstablishmentType } from '../common/schemas';
 import { TenantGuard } from '../common/tenant.guard';
 import { RestaurantsService } from './restaurants.service';
 
@@ -39,7 +39,7 @@ class UpdateRestaurantDto extends CreateRestaurantDto {
 }
 
 class UpdateSettingsDto { @IsOptional() @IsNumber() @Min(0) minimumOrder?: number; @IsOptional() @IsBoolean() pickupEnabled?: boolean; @IsOptional() @IsBoolean() deliveryEnabled?: boolean; @IsOptional() @IsNumber() @Min(0) preparationMinutes?: number; @IsOptional() @IsBoolean() rappidexEnabled?: boolean; }
-class DeliveryZoneDto { @IsOptional() @IsMongoId() id?: string; @IsString() @MinLength(1) name!: string; @IsNumber() @Min(0) fee!: number; @IsOptional() @IsBoolean() active?: boolean; }
+class DeliveryZoneDto { @IsOptional() @IsMongoId() id?: string; @IsEnum(DeliveryCoverageType) coverageType!: DeliveryCoverageType; @IsOptional() @IsString() @MinLength(1) name?: string; @IsNumber() @Min(0) fee!: number; @IsOptional() @IsBoolean() active?: boolean; }
 class PaymentMethodDto { @IsIn(['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD']) method!: string; @IsString() @MinLength(1) name!: string; @IsBoolean() active!: boolean; }
 class BusinessPeriodDto { @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) openTime!: string; @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) closeTime!: string; }
 class BusinessDayDto { @IsInt() @Min(0) @Max(6) dayOfWeek!: number; @IsBoolean() isOpen!: boolean; @IsArray() @ArrayMaxSize(12) @ValidateNested({ each: true }) @Type(() => BusinessPeriodDto) periods!: BusinessPeriodDto[]; }

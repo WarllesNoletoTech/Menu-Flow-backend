@@ -7,6 +7,7 @@ import { Role } from '../common/roles';
 import { AuthService } from '../auth/auth.service';
 import { LocationsService } from '../locations/locations.service';
 import { canAcceptOrdersNow, DEFAULT_TIMEZONE, openingStatus, validateBusinessHours } from './business-hours';
+import { normalizeBrazilianWhatsApp } from '../orders/order-whatsapp';
 
 @Injectable()
 export class RestaurantsService {
@@ -15,6 +16,7 @@ export class RestaurantsService {
 
   async create(input: Pick<Restaurant, 'name' | 'slug'> & Partial<Restaurant>) {
     try {
+      input.orderWhatsapp = normalizeBrazilianWhatsApp(input.orderWhatsapp);
       const restaurant = await this.restaurants.create(input);
       try { await this.settings.create({ restaurantId: restaurant._id }); }
       catch (error) { await this.restaurants.deleteOne({ _id: restaurant._id }); throw error; }
@@ -105,7 +107,8 @@ export class RestaurantsService {
         if (await this.users.exists({ email, _id: { $ne: currentOwner._id } })) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.');
       }
     }
-    const restaurantChanges = updateDocument(establishment, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl', 'mapUrl', 'pickupInstructions']);
+    establishment.orderWhatsapp = normalizeBrazilianWhatsApp(establishment.orderWhatsapp);
+    const restaurantChanges = updateDocument(establishment, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'orderWhatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl', 'mapUrl', 'pickupInstructions']);
     try {
       const updatedRestaurant = await this.restaurants.findByIdAndUpdate(restaurantId, restaurantChanges, { new: true, runValidators: true });
       if (!updatedRestaurant) throw new NotFoundException('Estabelecimento não encontrado.');
@@ -120,7 +123,7 @@ export class RestaurantsService {
   }
 
   async list(): Promise<Array<Record<string, unknown>>> {
-    const fields = 'name slug tradeName cnpj email phone whatsapp instagram address state city description logoUrl bannerUrl establishmentType restaurantCategories open blocked';
+    const fields = 'name slug tradeName cnpj email phone whatsapp orderWhatsapp instagram address state city description logoUrl bannerUrl establishmentType restaurantCategories open blocked timezone';
     const restaurants = (await this.restaurants.find().select(fields).sort({ createdAt: -1 }).lean()).map(withDefaultType);
     const restaurantIds = restaurants.map((item) => item._id);
     const [owners, employeeCounts] = await Promise.all([
@@ -243,9 +246,9 @@ export class RestaurantsService {
     return { items: filtered.slice(start, start + query.limit), pagination: { page: query.page, limit: query.limit, total, pages: Math.ceil(total / query.limit) } };
   }
 
-  async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state mapUrl pickupInstructions logoUrl bannerUrl description phone whatsapp instagram establishmentType restaurantCategories timezone open blocked').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const [settings, deliveryZones, paymentMethods] = await Promise.all([this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours minimumOrder minimumOrderCents pickupEnabled deliveryEnabled').lean(), this.deliveryZones.find({ restaurantId: restaurant._id, active: true }).select('name coverageType fee feeCents active').sort({ name: 1 }).lean(), this.payments.find({ restaurantId: restaurant._id, active: true }).select('name method active').sort({ method: 1 }).lean()]); const businessHours = settings?.openingHours ?? []; const delivery = deliveryAvailability(settings?.deliveryEnabled ?? false, deliveryZones.length); return { ...withDefaultType(restaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, deliveryZones, paymentMethods, pickupEnabled: settings?.pickupEnabled ?? true, ...delivery, minimumOrderCents: settings?.minimumOrderCents ?? Math.round((settings?.minimumOrder ?? 0) * 100), ...restaurantAvailability(businessHours, restaurant.timezone, restaurant.open, restaurant.blocked) }; }
+  async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state mapUrl pickupInstructions logoUrl bannerUrl description phone orderWhatsapp instagram establishmentType restaurantCategories timezone open blocked').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const [settings, deliveryZones, paymentMethods] = await Promise.all([this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours minimumOrder minimumOrderCents pickupEnabled deliveryEnabled').lean(), this.deliveryZones.find({ restaurantId: restaurant._id, active: true }).select('name coverageType fee feeCents active').sort({ name: 1 }).lean(), this.payments.find({ restaurantId: restaurant._id, active: true }).select('name method active').sort({ method: 1 }).lean()]); const businessHours = settings?.openingHours ?? []; const delivery = deliveryAvailability(settings?.deliveryEnabled ?? false, deliveryZones.length); return { ...withDefaultType(restaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, deliveryZones, paymentMethods, pickupEnabled: settings?.pickupEnabled ?? true, ...delivery, minimumOrderCents: settings?.minimumOrderCents ?? Math.round((settings?.minimumOrder ?? 0) * 100), ...restaurantAvailability(businessHours, restaurant.timezone, restaurant.open, restaurant.blocked) }; }
   async ensureAcceptingOrders(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found'); const restaurant = await this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(); if (!restaurant) throw new NotFoundException('Restaurant not found'); const settings = await this.settings.findOne({ restaurantId }).lean(); return { restaurant, settings }; }
-  async update(id: string, input: Partial<Restaurant>, actorRole: Role) { if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl', 'mapUrl', 'pickupInstructions']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
+  async update(id: string, input: Partial<Restaurant>, actorRole: Role) { input.orderWhatsapp = normalizeBrazilianWhatsApp(input.orderWhatsapp); if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'orderWhatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl', 'mapUrl', 'pickupInstructions']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
   async updateSettings(id: string, input: Partial<RestaurantSettings>) {
     await this.ensureRestaurant(id);
     const restaurantId = new Types.ObjectId(id);

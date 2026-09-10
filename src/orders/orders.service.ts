@@ -5,6 +5,7 @@ import { Model, Types } from 'mongoose';
 import { Category, Coupon, Customer, DeliveryCoverageType, DeliveryZone, Order, Payment, Product, Restaurant, RestaurantSettings } from '../common/schemas';
 import { canAcceptOrdersNow } from '../restaurants/business-hours';
 import { OrdersGateway } from './orders.gateway';
+import { buildOrderWhatsAppMessage, buildWhatsAppUrl } from './order-whatsapp';
 
 export type CheckoutItem = { productId: string; quantity: number; addons?: Array<{ groupId: string; addonId: string }>; addonNames?: string[]; observation?: string };
 export type CheckoutInput = { customerName: string; phone: string; fulfillment: 'DELIVERY' | 'PICKUP'; paymentMethod: string; deliveryZoneId?: string; address?: Record<string, string>; needsChange?: boolean; changeForCents?: number; couponCode?: string; items: CheckoutItem[] };
@@ -58,7 +59,7 @@ export class OrdersService {
     if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Estabelecimento não encontrado.');
     const rid = new Types.ObjectId(restaurantId);
     const authenticatedCustomerId = customerId ? this.objectId(customerId, 'Cliente autenticado inválido.') : undefined;
-    if (idempotencyKey) { const existing = await this.orders.findOne({ restaurantId: rid, idempotencyKey }).lean(); if (existing) return existing; }
+    if (idempotencyKey) { const existing = await this.orders.findOne({ restaurantId: rid, idempotencyKey }).lean(); if (existing) { const restaurant = await this.restaurants.findById(rid).lean(); return this.checkoutResponse(existing, restaurant!); } }
     const [restaurant, settings] = await Promise.all([this.restaurants.findById(rid).lean(), this.settings.findOne({ restaurantId: rid }).lean()]);
     if (!restaurant || restaurant.blocked) throw new NotFoundException('Estabelecimento não encontrado.');
     const availability = canAcceptOrdersNow({ blocked: restaurant.blocked, acceptingOrders: restaurant.open, openingHours: settings?.openingHours ?? [], timezone: restaurant.timezone });
@@ -129,8 +130,8 @@ export class OrdersService {
       const order = await this.orders.create({ restaurantId: rid, customerId: authenticatedCustomerId, idempotencyKey, publicToken, orderNumber: `MF-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`, customerName: input.customerName.trim(), phone: input.phone.trim(), fulfillment: input.fulfillment, address: deliveryAddress, paymentMethod: input.paymentMethod, needsChange, changeForCents: needsChange ? input.changeForCents : undefined, changeFor: needsChange ? input.changeForCents! / 100 : undefined, expectedChangeCents: calculatedChangeCents, items, subtotal: subtotalCents / 100, subtotalCents, deliveryFee: deliveryFeeCents / 100, deliveryFeeCents, discount: discountCents / 100, discountCents, total: totalCents / 100, totalCents, status: 'PENDING', statusHistory: [{ status: 'PENDING', changedAt: new Date(), ...(authenticatedCustomerId ? { changedBy: authenticatedCustomerId } : {}) }] });
       if (couponId) await this.consumeCoupon(couponId, order._id);
       await this.customers.findOneAndUpdate({ restaurantId: rid, phone: input.phone.trim() }, { $set: { name: input.customerName.trim(), lastOrderAt: new Date() }, ...(deliveryAddress ? { $addToSet: { addresses: deliveryAddress } } : {}), $inc: { orderCount: 1, totalSpent: totalCents / 100 } }, { upsert: true });
-      this.gateway.publishNewOrder(rid.toHexString(), order.toJSON()); return order;
-    } catch (error) { if ((error as { code?: number }).code === 11000 && idempotencyKey) { const existing = await this.orders.findOne({ restaurantId: rid, idempotencyKey }).lean(); if (existing) return existing; } throw error; }
+      this.gateway.publishNewOrder(rid.toHexString(), order.toJSON()); return this.checkoutResponse(order.toObject(), restaurant);
+    } catch (error) { if ((error as { code?: number }).code === 11000 && idempotencyKey) { const existing = await this.orders.findOne({ restaurantId: rid, idempotencyKey }).lean(); if (existing) return this.checkoutResponse(existing, restaurant); } throw error; }
   }
 
   list(restaurantId: string) { const rid = this.objectId(restaurantId, 'Estabelecimento inválido.'); return this.orders.find({ restaurantId: rid }).sort({ createdAt: -1 }).limit(200).lean(); }
@@ -157,6 +158,11 @@ export class OrdersService {
   private validateAddress(address?: Record<string, string>) {
     for (const field of ['zipCode', 'street', 'number', 'neighborhood']) if (typeof address?.[field] !== 'string' || !address[field].trim()) throw new BadRequestException('Preencha o endereço completo para entrega.');
     if (address!.neighborhood.trim().length > 100) throw new BadRequestException('O bairro deve ter no máximo 100 caracteres.');
+  }
+  private checkoutResponse(order: any, restaurant: Restaurant) {
+    const trackingUrl = `/acompanhar/${encodeURIComponent(order.orderNumber)}?token=${encodeURIComponent(order.publicToken)}`;
+    const whatsappMessage = buildOrderWhatsAppMessage(order, restaurant);
+    return { ...order, trackingUrl, whatsappUrl: buildWhatsAppUrl(restaurant.orderWhatsapp, whatsappMessage) };
   }
   private objectId(value: string, message: string, notFound = false) { if (!Types.ObjectId.isValid(value)) { if (notFound) throw new NotFoundException(message); throw new BadRequestException(message); } return new Types.ObjectId(value); }
   private legacySelections(product: any, names: string[]) { return names.map((name) => { const matches = product.addonGroups.flatMap((group: any) => group.addons.filter((addon: any) => addon.name === name).map((addon: any) => ({ groupId: group._id?.toString(), addonId: addon._id?.toString() }))); if (matches.length !== 1 || !matches[0].groupId || !matches[0].addonId) throw new BadRequestException('Adicional antigo ambíguo. Selecione novamente.'); return matches[0]; }); }

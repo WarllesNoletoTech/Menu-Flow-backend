@@ -23,6 +23,7 @@ class CreateRestaurantDto {
   @IsOptional() @IsEnum(EstablishmentType) establishmentType?: EstablishmentType;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsString() whatsapp?: string;
+  @IsOptional() @IsString() orderWhatsapp?: string;
   @IsOptional() @IsString() instagram?: string;
   @IsOptional() @ValidateIf((_, value) => value !== '') @optionalHttpsUrl() logoUrl?: string;
   @IsOptional() @ValidateIf((_, value) => value !== '') @optionalHttpsUrl() bannerUrl?: string;

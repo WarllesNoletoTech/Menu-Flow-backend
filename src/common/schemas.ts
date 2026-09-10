@@ -23,6 +23,23 @@ export const EstablishmentTypeDefinitionSchema = SchemaFactory.createForClass(Es
 EstablishmentTypeDefinitionSchema.index({ sortOrder: 1, name: 1 });
 
 @Schema({ timestamps: true })
+export class HomeBanner {
+  @Prop({ required: true, trim: true }) name!: string;
+  @Prop({ trim: true }) title?: string;
+  @Prop({ trim: true }) description?: string;
+  @Prop({ required: true, trim: true }) desktopImageUrl!: string;
+  @Prop({ required: true, trim: true }) mobileImageUrl!: string;
+  @Prop({ trim: true }) targetUrl?: string;
+  @Prop({ default: true, index: true }) active!: boolean;
+  @Prop({ default: 0, index: true, min: 0 }) sortOrder!: number;
+  @Prop({ type: Types.ObjectId, ref: "User", required: true }) createdBy!: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "User", required: true }) updatedBy!: Types.ObjectId;
+}
+export type HomeBannerDocument = HydratedDocument<HomeBanner>;
+export const HomeBannerSchema = SchemaFactory.createForClass(HomeBanner);
+HomeBannerSchema.index({ active: 1, sortOrder: 1, createdAt: 1 });
+
+@Schema({ timestamps: true })
 export class Restaurant {
   @Prop({ required: true, trim: true }) name!: string;
   @Prop({ required: true, unique: true, lowercase: true, trim: true })

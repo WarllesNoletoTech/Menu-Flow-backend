@@ -7,9 +7,18 @@ import { canAcceptOrdersNow } from '../restaurants/business-hours';
 import { OrdersGateway } from './orders.gateway';
 
 export type CheckoutItem = { productId: string; quantity: number; addons?: Array<{ groupId: string; addonId: string }>; addonNames?: string[]; observation?: string };
-export type CheckoutInput = { customerName: string; phone: string; fulfillment: 'DELIVERY' | 'PICKUP'; paymentMethod: string; address?: Record<string, string>; needsChange?: boolean; changeForCents?: number; couponCode?: string; items: CheckoutItem[] };
+export type CheckoutInput = { customerName: string; phone: string; fulfillment: 'DELIVERY' | 'PICKUP'; paymentMethod: string; deliveryZoneId?: string; address?: Record<string, string>; needsChange?: boolean; changeForCents?: number; couponCode?: string; items: CheckoutItem[] };
 export const transitions: Record<string, string[]> = { PENDING: ['ACCEPTED', 'REJECTED', 'CANCELLED'], ACCEPTED: ['PREPARING', 'CANCELLED'], PREPARING: ['READY', 'CANCELLED'], READY: ['OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED'], OUT_FOR_DELIVERY: ['COMPLETED', 'CANCELLED'], COMPLETED: [], REJECTED: [], CANCELLED: [] };
 const cents = (modern: number | undefined, legacy: number | undefined) => modern ?? Math.round((legacy ?? 0) * 100);
+export function expectedChangeCents(paymentMethod: string, needsChange: boolean | undefined, changeForCents: number | undefined, totalCents: number) {
+  if (paymentMethod !== 'CASH') {
+    if (needsChange || changeForCents !== undefined) throw new BadRequestException('Troco só está disponível para pagamento em dinheiro.');
+    return undefined;
+  }
+  if (!needsChange) return undefined;
+  if (!Number.isInteger(changeForCents) || changeForCents! < totalCents) throw new BadRequestException('O valor para troco não pode ser menor que o total do pedido.');
+  return changeForCents! - totalCents;
+}
 
 @Injectable()
 export class OrdersService {
@@ -68,19 +77,21 @@ export class OrdersService {
     let deliveryFeeCents = 0;
     if (input.fulfillment === 'DELIVERY') {
       const neighborhood = input.address!.neighborhood.trim();
-      const zone = await this.zones.findOne({ restaurantId: rid, name: new RegExp(`^${escapeRegex(neighborhood)}$`, 'i'), active: true }).lean();
+      const zone = input.deliveryZoneId
+        ? await this.zones.findOne({ _id: input.deliveryZoneId, restaurantId: rid, active: true }).lean()
+        : await this.zones.findOne({ restaurantId: rid, name: new RegExp(`^${escapeRegex(neighborhood)}$`, 'i'), active: true }).lean();
       if (!zone) throw new BadRequestException('Este endereço está fora da área de entrega deste estabelecimento.');
+      if (zone.name.localeCompare(neighborhood, 'pt-BR', { sensitivity: 'base' }) !== 0) throw new BadRequestException('A região selecionada não corresponde ao endereço informado.');
       deliveryFeeCents = cents(zone.feeCents, zone.fee);
     }
     let discountCents = 0; let couponId: Types.ObjectId | undefined;
     if (input.couponCode) { const coupon = await this.validCoupon(rid, input.couponCode, subtotalCents); discountCents = coupon.type === 'PERCENTAGE' ? Math.round(subtotalCents * coupon.value / 100) : Math.round(coupon.value * 100); discountCents = Math.min(discountCents, subtotalCents); couponId = coupon._id; }
     const totalCents = subtotalCents + deliveryFeeCents - discountCents;
     const needsChange = input.paymentMethod === 'CASH' && Boolean(input.needsChange);
-    if (input.paymentMethod !== 'CASH' && (input.needsChange || input.changeForCents !== undefined)) throw new BadRequestException('Troco só está disponível para pagamento em dinheiro.');
-    if (needsChange && (!Number.isInteger(input.changeForCents) || input.changeForCents! < totalCents)) throw new BadRequestException('O valor para troco não pode ser menor que o total do pedido.');
+    const calculatedChangeCents = expectedChangeCents(input.paymentMethod, input.needsChange, input.changeForCents, totalCents);
     const publicToken = randomBytes(32).toString('base64url');
     try {
-      const order = await this.orders.create({ restaurantId: rid, customerId: customerId ? new Types.ObjectId(customerId) : undefined, idempotencyKey, publicToken, orderNumber: `MF-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`, customerName: input.customerName.trim(), phone: input.phone.trim(), fulfillment: input.fulfillment, address: input.fulfillment === 'DELIVERY' ? input.address : undefined, paymentMethod: input.paymentMethod, needsChange, changeForCents: needsChange ? input.changeForCents : undefined, changeFor: needsChange ? input.changeForCents! / 100 : undefined, expectedChangeCents: needsChange ? input.changeForCents! - totalCents : undefined, items, subtotal: subtotalCents / 100, subtotalCents, deliveryFee: deliveryFeeCents / 100, deliveryFeeCents, discount: discountCents / 100, discountCents, total: totalCents / 100, totalCents, status: 'PENDING', statusHistory: [{ status: 'PENDING', changedAt: new Date(), ...(customerId ? { changedBy: new Types.ObjectId(customerId) } : {}) }] });
+      const order = await this.orders.create({ restaurantId: rid, customerId: customerId ? new Types.ObjectId(customerId) : undefined, idempotencyKey, publicToken, orderNumber: `MF-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`, customerName: input.customerName.trim(), phone: input.phone.trim(), fulfillment: input.fulfillment, address: input.fulfillment === 'DELIVERY' ? input.address : undefined, paymentMethod: input.paymentMethod, needsChange, changeForCents: needsChange ? input.changeForCents : undefined, changeFor: needsChange ? input.changeForCents! / 100 : undefined, expectedChangeCents: calculatedChangeCents, items, subtotal: subtotalCents / 100, subtotalCents, deliveryFee: deliveryFeeCents / 100, deliveryFeeCents, discount: discountCents / 100, discountCents, total: totalCents / 100, totalCents, status: 'PENDING', statusHistory: [{ status: 'PENDING', changedAt: new Date(), ...(customerId ? { changedBy: new Types.ObjectId(customerId) } : {}) }] });
       if (couponId) await this.consumeCoupon(couponId, order._id);
       await this.customers.findOneAndUpdate({ restaurantId: rid, phone: input.phone.trim() }, { $set: { name: input.customerName.trim(), lastOrderAt: new Date() }, ...(input.address ? { $addToSet: { addresses: input.address } } : {}), $inc: { orderCount: 1, totalSpent: totalCents / 100 } }, { upsert: true });
       this.gateway.publishNewOrder(restaurantId, order.toJSON()); return order;

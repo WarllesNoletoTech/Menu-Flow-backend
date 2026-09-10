@@ -56,18 +56,25 @@ export class RestaurantsService {
 
   async adminDetail(restaurantId: string) {
     await this.ensureRestaurant(restaurantId);
-    const establishment = await this.restaurants.findById(restaurantId).select('-__v').lean();
-    const users = await this.users.find({ restaurantId: new Types.ObjectId(restaurantId), role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null })
-      .select('name email phone role active restaurantId').sort({ createdAt: 1 }).lean();
+    const rid = new Types.ObjectId(restaurantId);
+    const [establishment, users, settings, deliveryZones, paymentMethods] = await Promise.all([
+      this.restaurants.findById(rid).select('-__v').lean(),
+      this.users.find({ restaurantId: rid, role: { $in: [Role.RESTAURANT_ADMIN, Role.EMPLOYEE] }, deletedAt: null }).select('name email phone role active restaurantId').sort({ createdAt: 1 }).lean(),
+      this.settings.findOne({ restaurantId: rid }).select('-__v').lean(),
+      this.deliveryZones.find({ restaurantId: rid }).sort({ name: 1 }).lean(),
+      this.payments.find({ restaurantId: rid }).sort({ method: 1 }).lean(),
+    ]);
     const summaries = users.map(storeUserSummary);
-    return { establishment: withDefaultType(establishment!), owner: summaries.find((user) => user.role === Role.RESTAURANT_ADMIN) ?? null, users: summaries };
+    return { establishment: withDefaultType(establishment!), owner: summaries.find((user) => user.role === Role.RESTAURANT_ADMIN) ?? null, users: summaries, settings, deliveryZones, paymentMethods };
   }
 
   async ownerDetail(restaurantId: string): Promise<Record<string, unknown>> {
     await this.ensureRestaurant(restaurantId);
-    const [establishment, settings] = await Promise.all([
+    const [establishment, settings, deliveryZones, paymentMethods] = await Promise.all([
       this.restaurants.findById(restaurantId).select('-__v').lean(),
       this.settings.findOne({ restaurantId }).select('-__v').lean(),
+      this.deliveryZones.find({ restaurantId }).sort({ name: 1 }).lean(),
+      this.payments.find({ restaurantId }).sort({ method: 1 }).lean(),
     ]);
     const availability = canAcceptOrdersNow({
       blocked: establishment!.blocked,
@@ -75,7 +82,7 @@ export class RestaurantsService {
       openingHours: settings?.openingHours ?? [],
       timezone: establishment!.timezone,
     });
-    return { establishment: { ...withDefaultType(establishment!), ...availability }, settings };
+    return { establishment: { ...withDefaultType(establishment!), ...availability }, settings, deliveryZones, paymentMethods };
   }
 
   async memberContext(restaurantId: string) {

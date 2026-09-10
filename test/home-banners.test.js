@@ -12,4 +12,9 @@ test('banner targets accept safe internal paths or HTTPS', () => {
   assert.equal(isSafeTargetUrl('https://exemplo.com/campanha'), true);
   assert.equal(isSafeTargetUrl('//evil.example'), false);
   assert.equal(isSafeTargetUrl('vbscript:alert(1)'), false);
+  assert.equal(isSafeTargetUrl('javascript:alert(1)'), false);
+  assert.equal(isSafeTargetUrl('data:text/html,unsafe'), false);
+  assert.equal(isSafeTargetUrl('file:///tmp/unsafe'), false);
+  assert.equal(isSafeTargetUrl('http://exemplo.com/inseguro'), false);
+  assert.equal(isSafeTargetUrl('/rota\\invalida'), false);
 });

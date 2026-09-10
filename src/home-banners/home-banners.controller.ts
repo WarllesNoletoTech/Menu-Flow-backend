@@ -6,8 +6,8 @@ import { Role } from '../common/roles';
 import { Roles, RolesGuard } from '../common/roles.guard';
 import { HomeBannersService } from './home-banners.service';
 
-export function isSafeHttpsUrl(value: string) { try { const url = new URL(value); return url.protocol === 'https:'; } catch { return false; } }
-export function isSafeTargetUrl(value: string) { return value.startsWith('/') ? !value.startsWith('//') && !/[\\\r\n]/.test(value) : isSafeHttpsUrl(value); }
+export function isSafeHttpsUrl(value: string) { try { const url = new URL(value.trim()); return url.protocol === 'https:'; } catch { return false; } }
+export function isSafeTargetUrl(value: string) { const target = value.trim(); return target.startsWith('/') ? !target.startsWith('//') && !/[\\\r\n]/.test(target) : isSafeHttpsUrl(target); }
 @ValidatorConstraint({ name: 'safeImageUrl' }) class SafeImageUrl implements ValidatorConstraintInterface { validate(value: unknown) { return typeof value === 'string' && isSafeHttpsUrl(value); } defaultMessage() { return 'Informe uma URL segura iniciada por https://.'; } }
 @ValidatorConstraint({ name: 'safeTargetUrl' }) class SafeTargetUrl implements ValidatorConstraintInterface { validate(value: unknown) { return typeof value === 'string' && isSafeTargetUrl(value); } defaultMessage() { return 'Informe um caminho interno ou uma URL segura iniciada por https://.'; } }
 
@@ -17,7 +17,7 @@ export class CreateHomeBannerDto {
   @IsOptional() @IsString() @MaxLength(500) description?: string;
   @IsString() @Validate(SafeImageUrl) desktopImageUrl!: string;
   @IsString() @Validate(SafeImageUrl) mobileImageUrl!: string;
-  @IsOptional() @ValidateIf((_, value) => value !== '') @IsString() @Validate(SafeTargetUrl) targetUrl?: string;
+  @IsOptional() @ValidateIf((_, value) => value !== '') @IsString() @MaxLength(2048) @Validate(SafeTargetUrl) targetUrl?: string;
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsInt() @Min(0) sortOrder?: number;
 }
@@ -27,7 +27,7 @@ export class UpdateHomeBannerDto {
   @IsOptional() @IsString() @MaxLength(500) description?: string;
   @IsOptional() @IsString() @Validate(SafeImageUrl) desktopImageUrl?: string;
   @IsOptional() @IsString() @Validate(SafeImageUrl) mobileImageUrl?: string;
-  @IsOptional() @ValidateIf((_, value) => value !== '') @IsString() @Validate(SafeTargetUrl) targetUrl?: string;
+  @IsOptional() @ValidateIf((_, value) => value !== '') @IsString() @MaxLength(2048) @Validate(SafeTargetUrl) targetUrl?: string;
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsInt() @Min(0) sortOrder?: number;
 }

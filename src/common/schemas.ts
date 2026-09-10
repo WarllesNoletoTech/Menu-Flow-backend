@@ -29,7 +29,7 @@ export class HomeBanner {
   @Prop({ trim: true }) description?: string;
   @Prop({ required: true, trim: true }) desktopImageUrl!: string;
   @Prop({ required: true, trim: true }) mobileImageUrl!: string;
-  @Prop({ trim: true }) targetUrl?: string;
+  @Prop({ type: String, trim: true, default: null }) targetUrl?: string | null;
   @Prop({ default: true, index: true }) active!: boolean;
   @Prop({ default: 0, index: true, min: 0 }) sortOrder!: number;
   @Prop({ type: Types.ObjectId, ref: "User", required: true }) createdBy!: Types.ObjectId;

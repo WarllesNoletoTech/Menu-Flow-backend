@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUrl, Matches, Max, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { JwtGuard } from '../auth/jwt.guard';
@@ -66,9 +66,9 @@ export class RestaurantsController {
   updateMine(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateRestaurantDto) { return this.restaurants.update(request.user.restaurantId, body, Role.RESTAURANT_ADMIN); }
   @Patch('me/settings') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   updateMySettings(@Req() request: { user: { restaurantId: string } }, @Body() body: UpdateSettingsDto) { return this.restaurants.updateSettings(request.user.restaurantId, body); }
-  @Get('me/business-hours') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  @Get('me/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   myBusinessHours(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.businessHours(request.user.restaurantId); }
-  @Patch('me/business-hours') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  @Patch('me/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   updateMyBusinessHours(@Req() request: { user: { sub: string; restaurantId: string } }, @Body() body: BusinessHoursDto) { return this.restaurants.updateBusinessHours(request.user.restaurantId, body.days, request.user.sub, false); }
   @Get('me/users') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   myUsers(@Req() request: { user: { restaurantId: string } }) { return this.restaurants.employeesForRestaurant(request.user.restaurantId); }
@@ -81,8 +81,8 @@ export class RestaurantsController {
   @Post() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) create(@Body() body: CreateRestaurantDto) { return this.restaurants.create(body); }
   @Post('with-admin') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) createWithOwner(@Body() body: EstablishmentWithOwnerDto) { return this.restaurants.createWithOwner(body.establishment as Required<Pick<CreateRestaurantDto, 'name' | 'slug' | 'city' | 'state' | 'establishmentType'>> & CreateRestaurantDto, body.owner); }
   @Get(':restaurantId/admin-detail') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) adminDetail(@Param('restaurantId') id: string) { return this.restaurants.adminDetail(id); }
-  @Get(':restaurantId/business-hours') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) businessHours(@Param('restaurantId') id: string) { return this.restaurants.businessHours(id); }
-  @Patch(':restaurantId/business-hours') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateBusinessHours(@Param('restaurantId') id: string, @Req() request: { user: { sub: string } }, @Body() body: BusinessHoursDto) { return this.restaurants.updateBusinessHours(id, body.days, request.user.sub, true); }
+  @Get(':restaurantId/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) businessHours(@Param('restaurantId') id: string) { return this.restaurants.businessHours(id); }
+  @Patch(':restaurantId/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateBusinessHours(@Param('restaurantId') id: string, @Req() request: { user: { sub: string } }, @Body() body: BusinessHoursDto) { return this.restaurants.updateBusinessHours(id, body.days, request.user.sub, true); }
   @Patch(':restaurantId/with-owner') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateWithOwner(@Param('restaurantId') id: string, @Body() body: UpdateWithOwnerDto) { return this.restaurants.updateWithOwner(id, body.establishment, body.owner); }
   @Post(':restaurantId/owners') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) addOwner(@Param('restaurantId') id: string, @Body() body: OwnerDto) { return this.restaurants.addOwner(id, body); }
   @Post(':restaurantId/employees') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) addEmployee(@Param('restaurantId') id: string, @Body() body: EmployeeDto) { return this.restaurants.addEmployee(id, body); }

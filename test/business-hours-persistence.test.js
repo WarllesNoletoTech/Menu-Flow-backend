@@ -62,3 +62,25 @@ test('SUPER_ADMIN uses the same persistence path and records the audit', async (
   const result = await service.updateBusinessHours(restaurantId, week(), new Types.ObjectId().toHexString(), true);
   assert.equal(result.configured, true); assert.equal(calls.creates, 1); assert.equal(calls.audits, 1);
 });
+
+test('GET reads persisted hours through the canonical ObjectId link', async () => {
+  const restaurantId = new Types.ObjectId();
+  const days = week(); days[3] = { dayOfWeek: 3, isOpen: true, periods: [{ openTime: '08:00', closeTime: '23:00' }] };
+  let settingsFilter;
+  const restaurants = {
+    exists: async ({ _id }) => _id instanceof Types.ObjectId && _id.equals(restaurantId),
+    findById: (id) => {
+      assert.equal(id instanceof Types.ObjectId && id.equals(restaurantId), true);
+      return query({ name: 'Teste', timezone: 'America/Sao_Paulo' });
+    },
+  };
+  const settings = { findOne: (filter) => { settingsFilter = filter; return query({ openingHours: days }); } };
+  const service = new RestaurantsService(restaurants, settings, {}, {}, {}, {});
+
+  const result = await service.businessHours(restaurantId.toHexString());
+
+  assert.equal(settingsFilter.restaurantId instanceof Types.ObjectId, true);
+  assert.equal(settingsFilter.restaurantId.equals(restaurantId), true);
+  assert.equal(result.configured, true);
+  assert.deepEqual(result.days[3], days[3]);
+});

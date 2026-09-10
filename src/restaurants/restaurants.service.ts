@@ -229,7 +229,16 @@ export class RestaurantsService {
   async ensureAcceptingOrders(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found'); const restaurant = await this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(); if (!restaurant) throw new NotFoundException('Restaurant not found'); const settings = await this.settings.findOne({ restaurantId }).lean(); return { restaurant, settings }; }
   async update(id: string, input: Partial<Restaurant>, actorRole: Role) { if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
   async updateSettings(id: string, input: Partial<RestaurantSettings>) { const settings = await this.settings.findOneAndUpdate({ restaurantId: id }, input, { new: true, runValidators: true }); if (!settings) throw new NotFoundException('Restaurant settings not found'); return settings; }
-  async businessHours(id: string): Promise<Record<string, unknown>> { await this.ensureRestaurant(id); const [restaurant, settings] = await Promise.all([this.restaurants.findById(id).select('name timezone').lean(), this.settings.findOne({ restaurantId: id }).lean()]); return { restaurantId: id, restaurantName: restaurant!.name, timezone: restaurant!.timezone || DEFAULT_TIMEZONE, configured: Boolean(settings?.openingHours?.length), days: settings?.openingHours ?? [] }; }
+  async businessHours(id: string): Promise<Record<string, unknown>> {
+    await this.ensureRestaurant(id);
+    const restaurantId = new Types.ObjectId(id);
+    const [restaurant, settings] = await Promise.all([
+      this.restaurants.findById(restaurantId).select('name timezone').lean(),
+      this.settings.findOne({ restaurantId }).lean(),
+    ]);
+    const days = Array.isArray(settings?.openingHours) ? settings.openingHours : [];
+    return { restaurantId: id, restaurantName: restaurant!.name, timezone: restaurant!.timezone || DEFAULT_TIMEZONE, configured: days.length > 0, days };
+  }
   async updateBusinessHours(id: string, days: BusinessDay[], actorId: string, admin: boolean): Promise<Record<string, unknown>> {
     await this.ensureRestaurant(id);
     const restaurantId = new Types.ObjectId(id);

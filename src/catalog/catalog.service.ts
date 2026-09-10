@@ -4,11 +4,12 @@ import { Model, Types } from 'mongoose';
 import { Category, Product } from '../common/schemas';
 
 type AddonGroupInput = {
+  _id?: string;
   name: string;
   required?: boolean;
   min?: number;
   max?: number;
-  addons: Array<{ name: string; price: number }>;
+  addons: Array<{ _id?: string; name: string; price: number }>;
 };
 
 type CategoryInput = { name: string; order?: number; active?: boolean };
@@ -105,7 +106,7 @@ export class CatalogService {
     const normalized = await this.normalizeProductInput(rid, input, true);
     const categoryId = new Types.ObjectId(normalized.categoryId!);
     const order = normalized.order ?? await this.products.countDocuments({ restaurantId: rid, categoryId });
-    const product = await this.products.create({ ...normalized, categoryId, order, restaurantId: rid });
+    const product = await this.products.create({ ...normalized, priceCents: Math.round(normalized.price! * 100), ...(normalized.promotionalPrice == null ? {} : { promotionalPriceCents: Math.round(normalized.promotionalPrice * 100) }), categoryId, order, restaurantId: rid });
     return product.toObject();
   }
 
@@ -130,6 +131,11 @@ export class CatalogService {
     for (const [key, value] of Object.entries(normalized)) {
       if (['promotionalPrice', 'description', 'imageUrl'].includes(key) && (value === null || value === '')) unset[key] = 1;
       else if (value !== undefined) set[key] = value;
+    }
+    if (normalized.price !== undefined) set.priceCents = Math.round(normalized.price * 100);
+    if (normalized.promotionalPrice !== undefined) {
+      if (normalized.promotionalPrice === null) unset.promotionalPriceCents = 1;
+      else set.promotionalPriceCents = Math.round(normalized.promotionalPrice * 100);
     }
 
     const updated = await this.products.findOneAndUpdate(
@@ -241,7 +247,7 @@ export class CatalogService {
     if (input.categoryId !== undefined) {
       if (!Types.ObjectId.isValid(input.categoryId)) throw new BadRequestException('Categoria inválida para o produto.');
       const categoryId = new Types.ObjectId(input.categoryId);
-      if (!(await this.categories.exists({ _id: categoryId, restaurantId }))) throw new NotFoundException('Categoria não encontrada.');
+      if (!(await this.categories.exists({ _id: categoryId, restaurantId, archivedAt: { $exists: false } }))) throw new NotFoundException('Categoria não encontrada ou arquivada.');
       normalized.categoryId = input.categoryId;
     } else if (creating) {
       throw new BadRequestException('Selecione uma categoria para o produto.');
@@ -273,7 +279,7 @@ export class CatalogService {
     return normalized;
   }
 
-  private normalizeAddonGroups(groups: AddonGroupInput[]) {
+  private normalizeAddonGroups(groups: AddonGroupInput[]): any[] {
     const groupNames = new Set<string>();
     const addonNames = new Set<string>();
 
@@ -286,17 +292,17 @@ export class CatalogService {
       if (!group.addons.length) throw new BadRequestException(`O grupo “${groupName}” precisa ter pelo menos uma opção.`);
       const min = group.min ?? (group.required ? 1 : 0);
       const max = group.max ?? 1;
-      if (min > max || max > group.addons.length) throw new BadRequestException(`Revise as quantidades do grupo “${groupName}”.`);
+      if (min < 0 || min > max || max > group.addons.length || (group.required && min < 1)) throw new BadRequestException(`Revise as quantidades do grupo “${groupName}”: grupos obrigatórios exigem no mínimo uma opção.`);
 
       const addons = group.addons.map((addon) => {
         const addonName = this.cleanRequiredName(addon.name, `Informe o nome de todas as opções do grupo “${groupName}”.`);
         const normalizedAddonName = addonName.toLocaleLowerCase('pt-BR');
         if (addonNames.has(normalizedAddonName)) throw new BadRequestException(`A opção “${addonName}” está duplicada neste produto.`);
         addonNames.add(normalizedAddonName);
-        return { name: addonName, price: addon.price };
+        return { ...(addon._id && Types.ObjectId.isValid(addon._id) ? { _id: new Types.ObjectId(addon._id) } : {}), name: addonName, price: addon.price, priceCents: Math.round(addon.price * 100) };
       });
 
-      return { name: groupName, required: Boolean(group.required), min, max, addons };
+      return { ...(group._id && Types.ObjectId.isValid(group._id) ? { _id: new Types.ObjectId(group._id) } : {}), name: groupName, required: Boolean(group.required), min, max, addons };
     });
   }
 }

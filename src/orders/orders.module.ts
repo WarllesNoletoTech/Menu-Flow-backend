@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { Coupon, CouponSchema, Customer, CustomerSchema, DeliveryZone, DeliveryZoneSchema, Order, OrderSchema, Payment, PaymentSchema, Product, ProductSchema, Restaurant, RestaurantSchema, RestaurantSettings, RestaurantSettingsSchema } from '../common/schemas';
-import { CustomerOrdersController, EmployeeOrdersController, OrdersController } from './orders.controller';
+import { Category, CategorySchema, Coupon, CouponSchema, Customer, CustomerSchema, DeliveryZone, DeliveryZoneSchema, Order, OrderSchema, Payment, PaymentSchema, Product, ProductSchema, Restaurant, RestaurantSchema, RestaurantSettings, RestaurantSettingsSchema } from '../common/schemas';
+import { CustomerOrdersController, EmployeeOrdersController, OrdersController, PublicOrderController } from './orders.controller';
 import { OrdersGateway } from './orders.gateway';
 import { OrdersService } from './orders.service';
 import { AuthModule } from '../auth/auth.module';
@@ -9,6 +9,7 @@ import { AuthModule } from '../auth/auth.module';
 @Module({
   imports: [AuthModule, MongooseModule.forFeature([
     { name: Order.name, schema: OrderSchema },
+    { name: Category.name, schema: CategorySchema },
     { name: Product.name, schema: ProductSchema },
     { name: Customer.name, schema: CustomerSchema },
     { name: DeliveryZone.name, schema: DeliveryZoneSchema },
@@ -17,7 +18,7 @@ import { AuthModule } from '../auth/auth.module';
     { name: Coupon.name, schema: CouponSchema },
     { name: Payment.name, schema: PaymentSchema },
   ])],
-  controllers: [OrdersController, CustomerOrdersController, EmployeeOrdersController],
+  controllers: [OrdersController, CustomerOrdersController, PublicOrderController, EmployeeOrdersController],
   providers: [OrdersService, OrdersGateway],
 })
 export class OrdersModule {}

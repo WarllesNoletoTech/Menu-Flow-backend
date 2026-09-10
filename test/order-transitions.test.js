@@ -1,0 +1,3 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {transitions}=require('../dist/orders/orders.service');
+test('permite somente o fluxo operacional previsto',()=>{assert.deepEqual(transitions.PENDING,['ACCEPTED','REJECTED','CANCELLED']);assert.ok(transitions.ACCEPTED.includes('PREPARING'));assert.ok(transitions.PREPARING.includes('READY'))});
+test('bloqueia saltos e reabertura de estados finais',()=>{assert.ok(!transitions.PENDING.includes('COMPLETED'));assert.ok(!transitions.REJECTED.includes('PREPARING'));assert.ok(!transitions.COMPLETED.includes('PREPARING'))});

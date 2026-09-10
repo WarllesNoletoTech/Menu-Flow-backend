@@ -23,11 +23,13 @@ import { TenantGuard } from '../common/tenant.guard';
 import { CatalogService } from './catalog.service';
 
 class AddonDto {
+  @IsOptional() @IsMongoId() _id?: string;
   @IsString() @IsNotEmpty() @MaxLength(100) name!: string;
   @IsNumber() @Min(0) price!: number;
 }
 
 class AddonGroupDto {
+  @IsOptional() @IsMongoId() _id?: string;
   @IsString() @IsNotEmpty() @MaxLength(100) name!: string;
   @IsOptional() @IsBoolean() required?: boolean;
   @IsOptional() @IsNumber() @Min(0) min?: number;
@@ -195,7 +197,9 @@ export class AdminCatalogController {
   @Post('categories') createCategory(@Param('restaurantId') id: string, @Body() body: CreateCategoryDto) { return this.catalog.createCategory(id, body); }
   @Patch('categories/reorder') reorderCategories(@Param('restaurantId') id: string, @Body() body: ReorderItemDto[]) { return this.catalog.reorderCategories(id, body); }
   @Patch('categories/:categoryId') updateCategory(@Param('restaurantId') id: string, @Param('categoryId') categoryId: string, @Body() body: UpdateCategoryDto) { return this.catalog.updateCategory(id, categoryId, body); }
+  @Patch('categories/:categoryId/archive') archiveCategory(@Param('restaurantId') id: string, @Param('categoryId') categoryId: string) { return this.catalog.archiveCategory(id, categoryId); }
   @Post('products') createProduct(@Param('restaurantId') id: string, @Body() body: CreateProductDto) { return this.catalog.createProduct(id, body); }
   @Patch('products/reorder') reorderProducts(@Param('restaurantId') id: string, @Body() body: ReorderItemDto[]) { return this.catalog.reorderProducts(id, body); }
   @Patch('products/:productId') updateProduct(@Param('restaurantId') id: string, @Param('productId') productId: string, @Body() body: UpdateProductDto) { return this.catalog.updateProduct(id, productId, body); }
+  @Patch('products/:productId/archive') archiveProduct(@Param('restaurantId') id: string, @Param('productId') productId: string) { return this.catalog.archiveProduct(id, productId); }
 }

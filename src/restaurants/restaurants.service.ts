@@ -243,10 +243,22 @@ export class RestaurantsService {
     return { items: filtered.slice(start, start + query.limit), pagination: { page: query.page, limit: query.limit, total, pages: Math.ceil(total / query.limit) } };
   }
 
-  async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state mapUrl pickupInstructions logoUrl bannerUrl description phone whatsapp instagram establishmentType restaurantCategories timezone open blocked').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const [settings, deliveryZones, paymentMethods] = await Promise.all([this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours minimumOrder minimumOrderCents pickupEnabled deliveryEnabled').lean(), this.deliveryZones.find({ restaurantId: restaurant._id, active: true }).select('name fee feeCents active').sort({ name: 1 }).lean(), this.payments.find({ restaurantId: restaurant._id, active: true }).select('name method active').sort({ method: 1 }).lean()]); const businessHours = settings?.openingHours ?? []; const deliveryEnabled = settings?.deliveryEnabled ?? false; const deliveryAvailable = deliveryEnabled && deliveryZones.length > 0; return { ...withDefaultType(restaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, deliveryZones, paymentMethods, pickupEnabled: settings?.pickupEnabled ?? true, deliveryEnabled, deliveryAvailable, ...(deliveryEnabled && !deliveryAvailable ? { deliveryUnavailableReason: 'Nenhuma região de entrega ativa.' } : {}), minimumOrderCents: settings?.minimumOrderCents ?? Math.round((settings?.minimumOrder ?? 0) * 100), ...restaurantAvailability(businessHours, restaurant.timezone, restaurant.open, restaurant.blocked) }; }
+  async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state mapUrl pickupInstructions logoUrl bannerUrl description phone whatsapp instagram establishmentType restaurantCategories timezone open blocked').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const [settings, deliveryZones, paymentMethods] = await Promise.all([this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours minimumOrder minimumOrderCents pickupEnabled deliveryEnabled').lean(), this.deliveryZones.find({ restaurantId: restaurant._id, active: true }).select('name fee feeCents active').sort({ name: 1 }).lean(), this.payments.find({ restaurantId: restaurant._id, active: true }).select('name method active').sort({ method: 1 }).lean()]); const businessHours = settings?.openingHours ?? []; const delivery = deliveryAvailability(settings?.deliveryEnabled ?? false, deliveryZones.length); return { ...withDefaultType(restaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, deliveryZones, paymentMethods, pickupEnabled: settings?.pickupEnabled ?? true, ...delivery, minimumOrderCents: settings?.minimumOrderCents ?? Math.round((settings?.minimumOrder ?? 0) * 100), ...restaurantAvailability(businessHours, restaurant.timezone, restaurant.open, restaurant.blocked) }; }
   async ensureAcceptingOrders(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found'); const restaurant = await this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(); if (!restaurant) throw new NotFoundException('Restaurant not found'); const settings = await this.settings.findOne({ restaurantId }).lean(); return { restaurant, settings }; }
   async update(id: string, input: Partial<Restaurant>, actorRole: Role) { if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl', 'mapUrl', 'pickupInstructions']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
-  async updateSettings(id: string, input: Partial<RestaurantSettings>) { const normalized = { ...input, ...(input.minimumOrder !== undefined ? { minimumOrderCents: Math.round(input.minimumOrder * 100) } : {}) }; return this.settings.findOneAndUpdate({ restaurantId: id }, { $set: normalized }, { new: true, upsert: true, runValidators: true }); }
+  async updateSettings(id: string, input: Partial<RestaurantSettings>) {
+    await this.ensureRestaurant(id);
+    const restaurantId = new Types.ObjectId(id);
+    const normalized = { ...input, ...(input.minimumOrder !== undefined ? { minimumOrderCents: Math.round(input.minimumOrder * 100) } : {}) };
+    const existing = await this.settings.findOne({ restaurantId });
+    if (existing) return this.settings.findByIdAndUpdate(existing._id, { $set: normalized }, { new: true, runValidators: true });
+    const legacy = await this.settings.collection.findOne({ restaurantId: id });
+    if (legacy) {
+      await this.settings.collection.updateOne({ _id: legacy._id, restaurantId: id }, { $set: { restaurantId, ...normalized } });
+      return this.settings.findById(legacy._id).lean();
+    }
+    return this.settings.create({ restaurantId, ...normalized });
+  }
   async businessHours(id: string): Promise<Record<string, unknown>> {
     await this.ensureRestaurant(id);
     const restaurantId = new Types.ObjectId(id);
@@ -310,7 +322,7 @@ export class RestaurantsService {
       this.payments.find({ restaurantId: rid }).sort({ method: 1 }).lean(),
     ]);
     const settings = await this.settings.findOne({ restaurantId: rid }).select('pickupEnabled deliveryEnabled').lean();
-    return { deliveryZones, paymentMethods, pickupEnabled: settings?.pickupEnabled ?? true, deliveryEnabled: settings?.deliveryEnabled ?? false };
+    return { deliveryZones, paymentMethods, pickupEnabled: settings?.pickupEnabled ?? true, ...deliveryAvailability(settings?.deliveryEnabled ?? false, deliveryZones.filter((zone) => zone.active).length) };
   }
 
   async saveDeliveryZone(restaurantId: string, input: { id?: string; name: string; fee: number; active?: boolean }) {
@@ -382,4 +394,13 @@ function updateDocument(input: Partial<Restaurant>, clearable: Array<keyof Resta
     else if (value !== undefined) set[key] = value;
   }
   return { ...(Object.keys(set).length ? { $set: set } : {}), ...(Object.keys(unset).length ? { $unset: unset } : {}) };
+}
+
+export function deliveryAvailability(deliveryEnabled: boolean, activeZoneCount: number) {
+  const deliveryAvailable = deliveryEnabled && activeZoneCount > 0;
+  return {
+    deliveryEnabled,
+    deliveryAvailable,
+    ...(deliveryEnabled && !deliveryAvailable ? { deliveryUnavailableReason: 'Nenhuma região de entrega ativa.' } : {}),
+  };
 }

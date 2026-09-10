@@ -18,7 +18,9 @@
     "test": "npm run build && node --test test/*.test.js",
     "migrate:money-orders": "npm run build && node dist/scripts/migrate-order-money-addons.js",
     "check:order-links": "npm run build && node dist/scripts/migrate-order-links.js",
-    "migrate:order-links": "npm run build && node dist/scripts/migrate-order-links.js --apply"
+    "migrate:order-links": "npm run build && node dist/scripts/migrate-order-links.js --apply",
+    "check:integration-contracts": "npm run build && node dist/scripts/migrate-integration-contracts.js",
+    "migrate:integration-contracts": "npm run build && node dist/scripts/migrate-integration-contracts.js --apply"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

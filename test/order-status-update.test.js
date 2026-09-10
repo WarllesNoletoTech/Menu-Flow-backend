@@ -46,6 +46,12 @@ test('missing order returns 404', async () => {
   const h = harness({ missing: true }); await assert.rejects(h.service.updateStatus(`${h.restaurantId}`, `${h.orderId}`, 'ACCEPTED', `${h.actorId}`), error => error instanceof NotFoundException && error.getStatus() === 404);
 });
 
+test('DELIVERY completes only after OUT_FOR_DELIVERY and persists completion audit fields', async () => {
+  const h = harness({ status: 'OUT_FOR_DELIVERY' });
+  const result = await h.service.updateStatus(`${h.restaurantId}`, `${h.orderId}`, 'COMPLETED', `${h.actorId}`);
+  assert.equal(result.status, 'COMPLETED'); assert.ok(result.completedAt instanceof Date); assert.ok(result.completedBy.equals(h.actorId));
+});
+
 test('TenantGuard returns 403 when URL and authenticated tenant differ', () => {
   const guard = new TenantGuard(); const context = { switchToHttp: () => ({ getRequest: () => ({ user: { role: Role.RESTAURANT_ADMIN, restaurantId: new Types.ObjectId().toHexString() }, params: { restaurantId: new Types.ObjectId().toHexString() } }) }) };
   assert.throws(() => guard.canActivate(context), error => error instanceof ForbiddenException && error.getStatus() === 403);

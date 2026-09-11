@@ -121,7 +121,8 @@ export class CatalogService {
     const rid = this.restaurantObjectId(restaurantId);
     const normalized = await this.normalizeProductInput(rid, input, true);
     const categoryId = new Types.ObjectId(normalized.categoryId!);
-    const order = normalized.order ?? await this.products.countDocuments({ restaurantId: rid, categoryId });
+    const lastProduct = await this.products.findOne({ restaurantId: rid, categoryId, archivedAt: { $exists: false } }).sort({ order: -1, _id: -1 }).select('order').lean();
+    const order = (lastProduct?.order ?? -1) + 1;
     const product = await this.products.create({ ...normalized, priceCents: Math.round(normalized.price! * 100), ...(normalized.promotionalPrice == null ? {} : { promotionalPriceCents: Math.round(normalized.promotionalPrice * 100) }), categoryId, order, restaurantId: rid });
     return product.toObject();
   }
@@ -134,6 +135,13 @@ export class CatalogService {
     if (!existing) throw new NotFoundException('Produto não encontrado.');
 
     const normalized = await this.normalizeProductInput(rid, input, false);
+    const oldCategoryId = this.idString(existing.categoryId)!;
+    const categoryChanged = normalized.categoryId !== undefined && normalized.categoryId !== oldCategoryId;
+    if (categoryChanged) {
+      const destinationId = new Types.ObjectId(normalized.categoryId!);
+      const lastDestination = await this.products.findOne({ restaurantId: rid, categoryId: destinationId, archivedAt: { $exists: false }, _id: { $ne: existing._id } }).sort({ order: -1, _id: -1 }).select('order').lean();
+      normalized.order = (lastDestination?.order ?? -1) + 1;
+    }
     const effectivePrice = normalized.price ?? existing.price;
     const effectivePromotionalPrice = normalized.promotionalPrice === null
       ? undefined
@@ -163,6 +171,10 @@ export class CatalogService {
       { new: true, runValidators: true },
     ).lean();
     if (!updated) throw new NotFoundException('Produto não encontrado.');
+    if (categoryChanged) {
+      await this.normalizeCategoryOrders(rid, new Types.ObjectId(oldCategoryId));
+      await this.normalizeCategoryOrders(rid, new Types.ObjectId(normalized.categoryId!));
+    }
     return updated;
   }
 
@@ -191,6 +203,7 @@ export class CatalogService {
       { new: true },
     ).lean();
     if (!product) throw new NotFoundException('Produto não encontrado.');
+    await this.normalizeCategoryOrders(rid, product.categoryId);
     return product;
   }
 
@@ -198,8 +211,21 @@ export class CatalogService {
     return this.reorder(this.categories, restaurantId, items);
   }
 
-  reorderProducts(restaurantId: string, items: Array<{ id: string; order: number }>) {
-    return this.reorder(this.products, restaurantId, items);
+  async reorderProducts(restaurantId: string, items: Array<{ id: string; order: number }>) {
+    const rid = this.restaurantObjectId(restaurantId);
+    this.validateReorderItems(items);
+    const objectIds = items.map((item) => new Types.ObjectId(item.id));
+    const owned = await this.products.find({ _id: { $in: objectIds }, restaurantId: rid, archivedAt: { $exists: false } }).select('_id categoryId').lean();
+    if (owned.length !== items.length) throw new NotFoundException('Um ou mais itens não pertencem ao estabelecimento.');
+    const categoryIds = new Set(owned.map((product) => this.idString(product.categoryId)));
+    if (categoryIds.size !== 1) throw new BadRequestException('Os produtos devem pertencer à mesma categoria.');
+    const categoryId = new Types.ObjectId([...categoryIds][0]!);
+    const categoryProductCount = await this.products.countDocuments({ restaurantId: rid, categoryId, archivedAt: { $exists: false } });
+    if (categoryProductCount !== items.length) throw new BadRequestException('Envie todos os produtos da categoria para reorganizá-los.');
+    const orders = [...items.map((item) => item.order)].sort((a, b) => a - b);
+    if (orders.some((order, index) => order !== index)) throw new BadRequestException('As posições devem ser sequenciais, começando em zero.');
+    await this.bulkOrder(this.products, rid, items);
+    return { updated: items.length };
   }
 
   private async reorder(
@@ -208,28 +234,39 @@ export class CatalogService {
     items: Array<{ id: string; order: number }>,
   ) {
     const rid = this.restaurantObjectId(restaurantId);
+    this.validateReorderItems(items);
     const ids = items.map((item) => item.id);
-    if (
-      new Set(ids).size !== ids.length ||
-      new Set(items.map((item) => item.order)).size !== items.length ||
-      ids.some((id) => !Types.ObjectId.isValid(id))
-    ) {
-      throw new BadRequestException('A ordenação contém itens ou posições duplicadas.');
-    }
 
     const objectIds = ids.map((id) => new Types.ObjectId(id));
     const owned = await model.countDocuments({ _id: { $in: objectIds }, restaurantId: rid });
     if (owned !== ids.length) throw new NotFoundException('Um ou mais itens não pertencem ao estabelecimento.');
 
+    await this.bulkOrder(model, rid, items);
+    return { updated: items.length };
+  }
+
+  private validateReorderItems(items: Array<{ id: string; order: number }>) {
+    const ids = items.map((item) => item.id);
+    if (!items.length || new Set(ids).size !== ids.length || new Set(items.map((item) => item.order)).size !== items.length || ids.some((id) => !Types.ObjectId.isValid(id)) || items.some((item) => !Number.isInteger(item.order) || item.order < 0)) {
+      throw new BadRequestException('A ordenação contém itens ou posições inválidas ou duplicadas.');
+    }
+  }
+
+  private async bulkOrder(model: Model<Category> | Model<Product>, restaurantId: Types.ObjectId, items: Array<{ id: string; order: number }>) {
     await (model as unknown as Model<Record<string, unknown>>).bulkWrite(
       items.map((item) => ({
         updateOne: {
-          filter: { _id: new Types.ObjectId(item.id), restaurantId: rid },
+          filter: { _id: new Types.ObjectId(item.id), restaurantId },
           update: { $set: { order: item.order } },
         },
       })),
     );
-    return { updated: items.length };
+  }
+
+  private async normalizeCategoryOrders(restaurantId: Types.ObjectId, categoryId: Types.ObjectId) {
+    const siblings = await this.products.find({ restaurantId, categoryId, archivedAt: { $exists: false } }).sort({ order: 1, _id: 1 }).select('_id').lean();
+    if (!siblings.length) return;
+    await this.bulkOrder(this.products, restaurantId, siblings.map((item, order) => ({ id: item._id.toString(), order })));
   }
 
   private idString(value: unknown): string | undefined {

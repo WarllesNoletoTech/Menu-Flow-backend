@@ -264,6 +264,8 @@ OrderSchema.set("optimisticConcurrency", true);
 OrderSchema.index({ restaurantId: 1, createdAt: -1 });
 OrderSchema.index({ restaurantId: 1, status: 1, createdAt: -1 });
 OrderSchema.index({ restaurantId: 1, status: 1, completedAt: 1 });
+OrderSchema.index({ restaurantId: 1, status: 1, rejectedAt: 1 });
+OrderSchema.index({ restaurantId: 1, status: 1, cancelledAt: 1 });
 OrderSchema.index({ customerId: 1, createdAt: -1 });
 OrderSchema.pre("validate", function backfillLegacyMoney() {
   const order = this as unknown as Record<string, unknown>;

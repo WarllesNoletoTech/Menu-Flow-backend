@@ -127,6 +127,17 @@ export class BillingController {
   merchantDashboard(@Req() r: { user: { restaurantId: string } }) {
     return this.billing.merchantDashboard(r.user.restaurantId);
   }
+  @Get("me/sales-report")
+  @Header("Cache-Control", "no-store, private")
+  @Roles(Role.RESTAURANT_ADMIN)
+  merchantSalesReport(
+    @Req() r: { user: { restaurantId: string } },
+    @Query("start") start: string,
+    @Query("end") end: string,
+  ) {
+    return this.billing.merchantSalesReport(r.user.restaurantId, start, end);
+  }
+
   @Get("me")
   @Header("Cache-Control", "no-store, private")
   @Roles(Role.RESTAURANT_ADMIN)

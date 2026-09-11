@@ -24,6 +24,7 @@ import { canAcceptOrdersNow } from "../restaurants/business-hours";
 import { OrdersGateway } from "./orders.gateway";
 import { buildOrderWhatsAppMessage, buildWhatsAppUrl } from "./order-whatsapp";
 import { MENU_FLOW_ORDER_SERVICE_FEE_CENTS } from "../billing/billing-rules";
+import { zonedDateRange, type ZonedRange } from "../common/date-range";
 
 export type CheckoutItem = {
   productId: string;
@@ -516,24 +517,106 @@ export class OrdersService {
       .limit(200)
       .lean();
   }
-  async listGrouped(restaurantId: string, group: string, requestedPage = 1, requestedLimit = 10) {
+  async listGrouped(restaurantId: string, group: string, requestedPage = 1, requestedLimit = 10, startDate?: string, endDate?: string) {
     const rid = this.objectId(restaurantId, "Estabelecimento inválido.");
     const page = Math.max(1, requestedPage);
     const limit = Math.min(50, Math.max(1, requestedLimit));
     const statuses = orderGroups[group];
     if (!statuses) throw new BadRequestException("Grupo de pedidos inválido.");
+    const range = await this.restaurantRange(rid, startDate, endDate);
     const base = { restaurantId: rid };
-    const filter = { ...base, status: { $in: statuses } };
+    const filter = this.groupFilter(base, group, range);
     const [items, total, pending, inProgress, completed, cancelled] = await Promise.all([
       this.orders.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
       this.orders.countDocuments(filter),
-      this.orders.countDocuments({ ...base, status: { $in: orderGroups.pending } }),
-      this.orders.countDocuments({ ...base, status: { $in: orderGroups.in_progress } }),
-      this.orders.countDocuments({ ...base, status: { $in: orderGroups.completed } }),
-      this.orders.countDocuments({ ...base, status: { $in: orderGroups.cancelled } }),
+      this.orders.countDocuments(this.groupFilter(base, 'pending', range)),
+      this.orders.countDocuments(this.groupFilter(base, 'in_progress', range)),
+      this.orders.countDocuments(this.groupFilter(base, 'completed', range)),
+      this.orders.countDocuments(this.groupFilter(base, 'cancelled', range)),
     ]);
     return { items, page, limit, total, hasMore: page * limit < total, counts: { pending, inProgress, completed, cancelled } };
   }
+
+  async listAdminGrouped(group: string, requestedPage = 1, requestedLimit = 10, startDate?: string, endDate?: string, city?: string, state?: string) {
+    const page = Math.max(1, requestedPage);
+    const limit = Math.min(50, Math.max(1, requestedLimit));
+    if (!orderGroups[group]) throw new BadRequestException("Grupo de pedidos inválido.");
+    this.assertCompleteRange(startDate, endDate);
+    const restaurantQuery: Record<string, unknown> = { blocked: false };
+    if (city?.trim()) restaurantQuery.city = city.trim();
+    if (state?.trim()) restaurantQuery.state = state.trim().toUpperCase();
+    const restaurants = await this.restaurants.find(restaurantQuery).select('_id timezone').lean();
+    if (!restaurants.length) return { items: [], page, limit, total: 0, hasMore: false, counts: { pending: 0, inProgress: 0, completed: 0, cancelled: 0 } };
+    const rangeByTimezone = new Map<string, ZonedRange>();
+    if (startDate && endDate) {
+      for (const restaurant of restaurants) {
+        const timezone = restaurant.timezone || 'America/Sao_Paulo';
+        if (!rangeByTimezone.has(timezone)) rangeByTimezone.set(timezone, zonedDateRange(startDate, endDate, timezone));
+      }
+    }
+    const filterFor = (targetGroup: string) => this.adminGroupFilter(restaurants, targetGroup, rangeByTimezone);
+    const filter = filterFor(group);
+    const [items, total, pending, inProgress, completed, cancelled] = await Promise.all([
+      this.orders.find(filter).populate('restaurantId', 'name tradeName city state blocked').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      this.orders.countDocuments(filter),
+      this.orders.countDocuments(filterFor('pending')),
+      this.orders.countDocuments(filterFor('in_progress')),
+      this.orders.countDocuments(filterFor('completed')),
+      this.orders.countDocuments(filterFor('cancelled')),
+    ]);
+    return { items, page, limit, total, hasMore: page * limit < total, counts: { pending, inProgress, completed, cancelled } };
+  }
+  private assertCompleteRange(startDate?: string, endDate?: string) {
+    if (Boolean(startDate) !== Boolean(endDate)) throw new BadRequestException("Informe a data inicial e a data final.");
+  }
+
+  private async restaurantRange(restaurantId: Types.ObjectId, startDate?: string, endDate?: string) {
+    this.assertCompleteRange(startDate, endDate);
+    if (!startDate || !endDate) return undefined;
+    const restaurant = await this.restaurants.findById(restaurantId).select('timezone').lean();
+    if (!restaurant) throw new NotFoundException("Estabelecimento não encontrado.");
+    return zonedDateRange(startDate, endDate, restaurant.timezone || 'America/Sao_Paulo');
+  }
+
+  private groupFilter(base: Record<string, unknown>, group: string, range?: ZonedRange): Record<string, unknown> {
+    const statuses = orderGroups[group];
+    if (!statuses) throw new BadRequestException("Grupo de pedidos inválido.");
+    if (!range || group === 'pending' || group === 'in_progress') return { ...base, status: { $in: statuses } };
+    if (group === 'completed') return { ...base, status: 'COMPLETED', completedAt: { $gte: range.start, $lte: range.end } };
+    return { ...base, $or: [
+      { status: 'REJECTED', rejectedAt: { $gte: range.start, $lte: range.end } },
+      { status: 'CANCELLED', cancelledAt: { $gte: range.start, $lte: range.end } },
+    ] };
+  }
+
+  private adminGroupFilter(
+    restaurants: Array<{ _id: Types.ObjectId; timezone?: string }>,
+    group: string,
+    rangeByTimezone: Map<string, ZonedRange>,
+  ): Record<string, unknown> {
+    const statuses = orderGroups[group];
+    if (!statuses) throw new BadRequestException("Grupo de pedidos inválido.");
+    const ids = restaurants.map((restaurant) => restaurant._id);
+    if (!rangeByTimezone.size || group === 'pending' || group === 'in_progress') return { restaurantId: { $in: ids }, status: { $in: statuses } };
+    const byTimezone = new Map<string, Types.ObjectId[]>();
+    for (const restaurant of restaurants) {
+      const timezone = restaurant.timezone || 'America/Sao_Paulo';
+      const list = byTimezone.get(timezone) ?? [];
+      list.push(restaurant._id);
+      byTimezone.set(timezone, list);
+    }
+    const clauses: Record<string, unknown>[] = [];
+    for (const [timezone, restaurantIds] of byTimezone) {
+      const range = rangeByTimezone.get(timezone)!;
+      if (group === 'completed') clauses.push({ restaurantId: { $in: restaurantIds }, status: 'COMPLETED', completedAt: { $gte: range.start, $lte: range.end } });
+      else {
+        clauses.push({ restaurantId: { $in: restaurantIds }, status: 'REJECTED', rejectedAt: { $gte: range.start, $lte: range.end } });
+        clauses.push({ restaurantId: { $in: restaurantIds }, status: 'CANCELLED', cancelledAt: { $gte: range.start, $lte: range.end } });
+      }
+    }
+    return { $or: clauses };
+  }
+
   forCustomer(customerId: string) {
     const uid = this.objectId(customerId, "Cliente inválido.");
     return this.orders

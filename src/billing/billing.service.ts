@@ -35,6 +35,7 @@ import {
   isFirstTuesday,
 } from "./billing-rules";
 import { renderBillingReportPdf } from "./billing-pdf";
+import { zonedDateRange } from "../common/date-range";
 
 export function sumOrderServiceFees(
   orders: Array<{ customerServiceFeeCents?: number }>,
@@ -869,6 +870,102 @@ export class BillingService {
       period,
     };
   }
+
+  async merchantSalesReport(restaurantId: string, startDate: string, endDate: string) {
+    const rid = this.objectId(restaurantId);
+    const restaurant = await this.restaurants.findById(rid).select("timezone").lean();
+    if (!restaurant) throw new NotFoundException("Estabelecimento não encontrado.");
+    const timezone = restaurant.timezone || 'America/Sao_Paulo';
+    const { start, end } = zonedDateRange(startDate, endDate, timezone);
+    const [orders, cancelledOrders] = await Promise.all([
+      this.orders.find({ restaurantId: rid, status: 'COMPLETED', completedAt: { $gte: start, $lte: end } })
+        .select('orderNumber completedAt fulfillment paymentMethod items subtotal subtotalCents deliveryFee deliveryFeeCents discount discountCents total totalCents customerServiceFeeCents')
+        .sort({ completedAt: 1 })
+        .lean(),
+      this.orders.countDocuments({ restaurantId: rid, $or: [
+        { status: 'REJECTED', rejectedAt: { $gte: start, $lte: end } },
+        { status: 'CANCELLED', cancelledAt: { $gte: start, $lte: end } },
+      ] }),
+    ]);
+
+    const productMap = new Map<string, { productName: string; quantity: number; productRevenueCents: number }>();
+    const paymentMap = new Map<string, { method: string; orders: number; salesCents: number }>();
+    const fulfillmentMap = new Map<string, { fulfillment: string; orders: number; salesCents: number }>();
+    const dailyMap = new Map<string, { date: string; orders: number; salesCents: number }>();
+    let subtotalCents = 0;
+    let deliveryFeesCents = 0;
+    let discountsCents = 0;
+    let serviceFeesCents = 0;
+    let grossOrderVolumeCents = 0;
+
+    const cents = (modern: number | undefined, legacy: number | undefined) => modern ?? Math.round((legacy ?? 0) * 100);
+    const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    for (const order of orders as any[]) {
+      const orderTotalCents = cents(order.totalCents, order.total);
+      const serviceFeeCents = order.customerServiceFeeCents ?? 0;
+      const merchantSalesCents = orderTotalCents - serviceFeeCents;
+      subtotalCents += cents(order.subtotalCents, order.subtotal);
+      deliveryFeesCents += cents(order.deliveryFeeCents, order.deliveryFee);
+      discountsCents += cents(order.discountCents, order.discount);
+      serviceFeesCents += serviceFeeCents;
+      grossOrderVolumeCents += orderTotalCents;
+
+      for (const item of order.items ?? []) {
+        const unitPriceCents = cents(item.unitPriceCents, item.unitPrice);
+        const addonCents = (item.addons ?? []).reduce((sum: number, addon: any) => sum + cents(addon.priceCents, addon.price), 0);
+        const productRevenueCents = Math.max(0, item.quantity ?? 0) * (unitPriceCents + addonCents);
+        const key = item.productId?.toString?.() || item.productName;
+        const current = productMap.get(key) ?? { productName: item.productName || 'Produto', quantity: 0, productRevenueCents: 0 };
+        current.quantity += Math.max(0, item.quantity ?? 0);
+        current.productRevenueCents += productRevenueCents;
+        productMap.set(key, current);
+      }
+
+      const payment = paymentMap.get(order.paymentMethod) ?? { method: order.paymentMethod, orders: 0, salesCents: 0 };
+      payment.orders += 1;
+      payment.salesCents += merchantSalesCents;
+      paymentMap.set(order.paymentMethod, payment);
+
+      const fulfillment = fulfillmentMap.get(order.fulfillment) ?? { fulfillment: order.fulfillment, orders: 0, salesCents: 0 };
+      fulfillment.orders += 1;
+      fulfillment.salesCents += merchantSalesCents;
+      fulfillmentMap.set(order.fulfillment, fulfillment);
+
+      const dayParts = Object.fromEntries(dateFormatter.formatToParts(new Date(order.completedAt)).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+      const day = `${dayParts.year}-${dayParts.month}-${dayParts.day}`;
+      const daily = dailyMap.get(day) ?? { date: day, orders: 0, salesCents: 0 };
+      daily.orders += 1;
+      daily.salesCents += merchantSalesCents;
+      dailyMap.set(day, daily);
+    }
+
+    const completedOrders = orders.length;
+    const grossSalesCents = grossOrderVolumeCents - serviceFeesCents;
+    return {
+      periodStart: start,
+      periodEnd: end,
+      timezone,
+      salesMetrics: {
+        completedOrders,
+        grossSalesCents,
+        grossRevenueCents: grossSalesCents,
+        menuFlowServiceFeesCollectedCents: serviceFeesCents,
+        grossOrderVolumeCents,
+        averageTicketCents: completedOrders ? Math.round(grossSalesCents / completedOrders) : 0,
+        cancelledOrders,
+      },
+      details: {
+        subtotalCents,
+        deliveryFeesCents,
+        discountsCents,
+        products: Array.from(productMap.values()).sort((a, b) => b.quantity - a.quantity || a.productName.localeCompare(b.productName, 'pt-BR')),
+        paymentMethods: Array.from(paymentMap.values()).sort((a, b) => b.salesCents - a.salesCents),
+        fulfillments: Array.from(fulfillmentMap.values()).sort((a, b) => b.salesCents - a.salesCents),
+        daily: Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
+      },
+    };
+  }
+
   async merchant(restaurantId: string, period: string) {
     const rid = this.objectId(restaurantId);
     const restaurant = await this.restaurants

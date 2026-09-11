@@ -93,7 +93,35 @@ export class RestaurantsService {
       timezone: establishment!.timezone,
     });
     const [resolvedEstablishment] = await this.resolveTypes([establishment!]);
-    return { establishment: { ...withResolvedType(resolvedEstablishment), ...availability }, settings, deliveryZones, paymentMethods };
+    const ownerSettings = settings ? withoutAdminIntegrationSettings(settings) : settings;
+    return { establishment: { ...withResolvedType(resolvedEstablishment), ...availability }, settings: ownerSettings, deliveryZones, paymentMethods };
+  }
+
+  async rappidexIntegrations(): Promise<Array<Record<string, unknown>>> {
+    const restaurants = await this.restaurants.find().select('name tradeName city state open blocked').sort({ tradeName: 1, name: 1 }).lean();
+    const restaurantIds = restaurants.map((restaurant) => restaurant._id);
+    const settings = await this.settings.find({ restaurantId: { $in: restaurantIds } }).select('restaurantId deliveryEnabled rappidexEnabled').lean();
+    const settingsByRestaurant = new Map(settings.map((item) => [item.restaurantId.toString(), item]));
+    return restaurants.map((restaurant) => {
+      const storeSettings = settingsByRestaurant.get(restaurant._id.toString());
+      return {
+        restaurantId: restaurant._id.toString(),
+        name: restaurant.tradeName || restaurant.name,
+        legalName: restaurant.name,
+        city: restaurant.city ?? '',
+        state: restaurant.state ?? '',
+        open: restaurant.open,
+        blocked: restaurant.blocked,
+        deliveryEnabled: storeSettings?.deliveryEnabled ?? false,
+        rappidexEnabled: storeSettings?.rappidexEnabled ?? false,
+      };
+    });
+  }
+
+  async updateRappidexIntegration(restaurantId: string, enabled: boolean) {
+    await this.ensureRestaurant(restaurantId);
+    const settings = await this.updateSettings(restaurantId, { rappidexEnabled: enabled });
+    return { restaurantId, rappidexEnabled: settings?.rappidexEnabled ?? enabled };
   }
 
   async memberContext(restaurantId: string) {
@@ -409,6 +437,11 @@ export class RestaurantsService {
 function publicRestaurant(restaurant: RestaurantDocument) { return { id: restaurant.id, name: restaurant.name, slug: restaurant.slug, city: restaurant.city, state: restaurant.state, establishmentType: restaurant.establishmentType }; }
 function publicRestaurantDetail(restaurant: RestaurantDocument) { const value = restaurant.toObject(); delete (value as { __v?: number }).__v; return withDefaultType(value); }
 function ownerSummary(owner: { _id: Types.ObjectId; name: string; email: string; phone?: string; reportWhatsapp?: string; active: boolean }) { return { id: owner._id.toString(), name: owner.name, email: owner.email, phone: owner.phone, reportWhatsapp: owner.reportWhatsapp, active: owner.active }; }
+function withoutAdminIntegrationSettings<T extends Record<string, unknown>>(settings: T): Omit<T, 'rappidexEnabled'> {
+  const { rappidexEnabled: _rappidexEnabled, ...ownerVisible } = settings;
+  return ownerVisible;
+}
+
 function storeUserSummary(user: { _id: Types.ObjectId; name: string; email: string; phone?: string; reportWhatsapp?: string; role: Role; active: boolean }) { return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, active: user.active }; }
 
 function escapeRegExp(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }

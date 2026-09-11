@@ -39,7 +39,9 @@ class UpdateRestaurantDto extends CreateRestaurantDto {
   @IsOptional() @IsBoolean() blocked?: boolean;
 }
 
-class UpdateSettingsDto { @IsOptional() @IsNumber() @Min(0) minimumOrder?: number; @IsOptional() @IsBoolean() pickupEnabled?: boolean; @IsOptional() @IsBoolean() deliveryEnabled?: boolean; @IsOptional() @IsNumber() @Min(0) preparationMinutes?: number; @IsOptional() @IsBoolean() rappidexEnabled?: boolean; }
+class UpdateSettingsDto { @IsOptional() @IsNumber() @Min(0) minimumOrder?: number; @IsOptional() @IsBoolean() pickupEnabled?: boolean; @IsOptional() @IsBoolean() deliveryEnabled?: boolean; @IsOptional() @IsNumber() @Min(0) preparationMinutes?: number; }
+class UpdateAdminSettingsDto extends UpdateSettingsDto { @IsOptional() @IsBoolean() rappidexEnabled?: boolean; }
+class RappidexIntegrationDto { @IsBoolean() enabled!: boolean; }
 class DeliveryZoneDto { @IsOptional() @IsMongoId() id?: string; @IsEnum(DeliveryCoverageType) coverageType!: DeliveryCoverageType; @IsOptional() @IsString() @MinLength(1) name?: string; @IsNumber() @Min(0) fee!: number; @IsOptional() @IsBoolean() active?: boolean; }
 class PaymentMethodDto { @IsIn(['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD']) method!: string; @IsString() @MinLength(1) name!: string; @IsBoolean() active!: boolean; }
 class BusinessPeriodDto { @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) openTime!: string; @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) closeTime!: string; }
@@ -64,6 +66,7 @@ export class RestaurantsController {
   constructor(private readonly restaurants: RestaurantsService) {}
   @Get() @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) list() { return this.restaurants.list(); }
   @Get('owner-integrity/diagnostic') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) ownerIntegrityDiagnostic() { return this.restaurants.ownerIntegrityDiagnostic(); }
+  @Get('integrations/rappidex') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) rappidexIntegrations() { return this.restaurants.rappidexIntegrations(); }
   @Get('me') @Roles(Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, RolesGuard)
   mine(@Req() request: { user: { restaurantId: string } }): Promise<Record<string, unknown>> { return this.restaurants.ownerDetail(request.user.restaurantId); }
   @Get('my-context') @Roles(Role.RESTAURANT_ADMIN, Role.EMPLOYEE) @UseGuards(JwtGuard, RolesGuard)
@@ -102,6 +105,7 @@ export class RestaurantsController {
   @Patch(':restaurantId/users/:userId') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateUser(@Param('restaurantId') restaurantId: string, @Param('userId') userId: string, @Body() body: UpdateStoreUserDto) { return this.restaurants.updateStoreUser(restaurantId, userId, body); }
   @Delete(':restaurantId/employees/:userId') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) deleteEmployee(@Param('restaurantId') restaurantId: string, @Param('userId') userId: string) { return this.restaurants.deleteEmployee(restaurantId, userId); }
   @Patch(':restaurantId') @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) update(@Param('restaurantId') id: string, @Body() body: UpdateRestaurantDto, @Req() request: { user: { role: Role } }) { return this.restaurants.update(id, body, request.user.role); }
-  @Patch(':restaurantId/settings') @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN) @UseGuards(JwtGuard, TenantGuard, RolesGuard) updateSettings(@Param('restaurantId') id: string, @Body() body: UpdateSettingsDto) { return this.restaurants.updateSettings(id, body); }
+  @Patch(':restaurantId/integrations/rappidex') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateRappidexIntegration(@Param('restaurantId') id: string, @Body() body: RappidexIntegrationDto) { return this.restaurants.updateRappidexIntegration(id, body.enabled); }
+  @Patch(':restaurantId/settings') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateSettings(@Param('restaurantId') id: string, @Body() body: UpdateAdminSettingsDto) { return this.restaurants.updateSettings(id, body); }
   @Get(':slug') @Header('Cache-Control', 'no-store') find(@Param('slug') slug: string): Promise<Record<string, unknown>> { return this.restaurants.bySlug(slug); }
 }

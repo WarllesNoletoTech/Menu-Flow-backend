@@ -38,8 +38,17 @@ export function normalizeBrazilianWhatsApp(value?: string) {
   return digits;
 }
 
+export const normalizeWhatsAppText = (value: string) =>
+  value
+    .normalize("NFC")
+    .replace(/[\u00a0\u202f]/g, " ")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+
 const money = (cents: number) =>
-  (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  normalizeWhatsAppText(
+    (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }),
+  );
 const payment: Record<string, string> = {
   PIX: "Pix",
   CASH: "Dinheiro",
@@ -123,11 +132,11 @@ export function buildOrderWhatsAppMessage(
   );
   if (trackingUrl) lines.push("", "Acompanhar pedido:", trackingUrl);
   lines.push("", "O status oficial do pedido é atualizado pelo Menu Flow.");
-  return lines.join("\n");
+  return normalizeWhatsAppText(lines.join("\n"));
 }
 
 export function buildWhatsAppUrl(number: string | undefined, message: string) {
   return number
-    ? `https://wa.me/${number}?text=${encodeURIComponent(message)}`
+    ? `https://wa.me/${number}?text=${encodeURIComponent(normalizeWhatsAppText(message))}`
     : undefined;
 }

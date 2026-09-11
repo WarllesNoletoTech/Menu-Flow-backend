@@ -435,11 +435,11 @@ export class BillingService {
     const candidates = [
       resolve(
         process.cwd(),
-        "Menu-Flow-frontend/public/assets/branding/menu-flow-logo.png",
+        "Menu-Flow-frontend/public/assets/branding/menu-flow-wordmark.png",
       ),
       resolve(
         process.cwd(),
-        "../Menu-Flow-frontend/public/assets/branding/menu-flow-logo.png",
+        "../Menu-Flow-frontend/public/assets/branding/menu-flow-wordmark.png",
       ),
     ];
     for (const path of candidates) {
@@ -455,7 +455,7 @@ export class BillingService {
     if (frontend) {
       try {
         const response = await fetch(
-          `${frontend}/assets/branding/menu-flow-logo.png`,
+          `${frontend}/assets/branding/menu-flow-wordmark.png`,
           { signal: AbortSignal.timeout(4000) },
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);

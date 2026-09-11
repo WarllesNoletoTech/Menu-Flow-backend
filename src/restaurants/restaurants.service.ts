@@ -19,7 +19,10 @@ export class RestaurantsService {
 
   async create(input: Pick<Restaurant, 'name' | 'slug'> & RestaurantInput) {
     try {
-      if (input.establishmentTypeId) await this.requireActiveType(input.establishmentTypeId.toString());
+      if (input.establishmentTypeId) {
+        input.establishmentTypeId = this.normalizeEstablishmentTypeId(input.establishmentTypeId);
+        await this.requireActiveType(input.establishmentTypeId);
+      }
       input.orderWhatsapp = normalizeBrazilianWhatsApp(input.orderWhatsapp);
       const restaurant = await this.restaurants.create(input);
       try { await this.settings.create({ restaurantId: restaurant._id }); }
@@ -101,7 +104,10 @@ export class RestaurantsService {
 
   async updateWithOwner(restaurantId: string, establishment: RestaurantInput, owner?: { userId: string; name?: string; email?: string; phone?: string; reportWhatsapp?: string; active?: boolean; password?: string }) {
     await this.ensureRestaurant(restaurantId);
-    if (establishment.establishmentTypeId) await this.requireActiveType(establishment.establishmentTypeId.toString());
+    if (establishment.establishmentTypeId) {
+      establishment.establishmentTypeId = this.normalizeEstablishmentTypeId(establishment.establishmentTypeId);
+      await this.requireActiveType(establishment.establishmentTypeId);
+    }
     const currentRestaurant = await this.restaurants.findById(restaurantId).lean();
     if (!currentRestaurant) throw new NotFoundException('Estabelecimento não encontrado.');
     let currentOwner: UserDocument | null = null;
@@ -121,7 +127,8 @@ export class RestaurantsService {
       if (!updatedRestaurant) throw new NotFoundException('Estabelecimento não encontrado.');
       let updatedOwner: ReturnType<typeof storeUserSummary> | null = null;
       if (owner && currentOwner) updatedOwner = await this.applyStoreUserUpdate(currentOwner, restaurantId, owner);
-      return { establishment: publicRestaurantDetail(updatedRestaurant), owner: updatedOwner };
+      const [resolvedRestaurant] = await this.resolveTypes([updatedRestaurant.toObject()]);
+      return { establishment: withResolvedType(resolvedRestaurant), owner: updatedOwner };
     } catch (error) {
       // Restore the establishment if the linked owner update fails.
       await this.restaurants.replaceOne({ _id: restaurantId }, currentRestaurant);
@@ -237,14 +244,20 @@ export class RestaurantsService {
       const selectedType = await this.establishmentTypes.findOne({ slug: query.type, active: true }).select('_id slug').lean();
       if (!selectedType) return { items: [], pagination: { page: query.page, limit: query.limit, total: 0, pages: 0 } };
       const legacy = legacyTypeForSlug(selectedType.slug);
-      filter.$and = [{ $or: [{ establishmentTypeId: selectedType._id }, ...(legacy ? [{ establishmentType: legacy, establishmentTypeId: { $exists: false } }] : [])] }];
+      // The indexed ObjectId comparison is canonical. The expression only keeps
+      // legacy BSON strings visible until the idempotent migration is applied.
+      filter.$and = [{ $or: [
+        { establishmentTypeId: selectedType._id },
+        { $expr: { $and: [{ $eq: [{ $type: '$establishmentTypeId' }, 'string'] }, { $eq: ['$establishmentTypeId', selectedType._id.toString()] }] } },
+        ...(legacy ? [{ establishmentType: legacy, establishmentTypeId: { $exists: false } }] : []),
+      ] }];
     }
     if (query.search?.trim()) {
       const search = new RegExp(escapeRegExp(query.search.trim()), 'i');
       const inferredType = typeForSearch(query.search);
       filter.$or = [{ name: search }, { tradeName: search }, { description: search }, { restaurantCategories: search }, ...(inferredType ? [{ establishmentType: inferredType }] : [])];
     }
-    const select = 'name slug tradeName city state address mapUrl logoUrl bannerUrl description establishmentType restaurantCategories timezone open blocked';
+    const select = 'name slug tradeName city state address mapUrl logoUrl bannerUrl description establishmentType establishmentTypeId restaurantCategories timezone open blocked';
     const restaurants = await this.resolveTypes(await this.restaurants.find(filter).select(select).sort({ name: 1 }).lean());
     const settings = await this.settings.find({ restaurantId: { $in: restaurants.map((restaurant) => restaurant._id) } }).select('restaurantId openingHours').lean();
     const hoursByRestaurant = new Map(settings.map((item) => [item.restaurantId.toString(), item.openingHours ?? []]));
@@ -260,7 +273,7 @@ export class RestaurantsService {
 
   async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state mapUrl pickupInstructions logoUrl bannerUrl description phone orderWhatsapp instagram establishmentType establishmentTypeId restaurantCategories timezone open blocked').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const [resolvedRestaurant] = await this.resolveTypes([restaurant]); const [settings, deliveryZones, paymentMethods] = await Promise.all([this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours minimumOrder minimumOrderCents pickupEnabled deliveryEnabled').lean(), this.deliveryZones.find({ restaurantId: restaurant._id, active: true }).select('name coverageType fee feeCents active').sort({ name: 1 }).lean(), this.payments.find({ restaurantId: restaurant._id, active: true }).select('name method active').sort({ method: 1 }).lean()]); const businessHours = settings?.openingHours ?? []; const delivery = deliveryAvailability(settings?.deliveryEnabled ?? false, deliveryZones.length); return { ...withResolvedType(resolvedRestaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, deliveryZones, paymentMethods, pickupEnabled: settings?.pickupEnabled ?? true, ...delivery, minimumOrderCents: settings?.minimumOrderCents ?? Math.round((settings?.minimumOrder ?? 0) * 100), customerServiceFeeCents: MENU_FLOW_ORDER_SERVICE_FEE_CENTS, ...restaurantAvailability(businessHours, restaurant.timezone, restaurant.open, restaurant.blocked) }; }
   async ensureAcceptingOrders(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found'); const restaurant = await this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(); if (!restaurant) throw new NotFoundException('Restaurant not found'); const settings = await this.settings.findOne({ restaurantId }).lean(); return { restaurant, settings }; }
-  async update(id: string, input: RestaurantInput, actorRole: Role) { input.orderWhatsapp = normalizeBrazilianWhatsApp(input.orderWhatsapp); if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentTypeId !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'orderWhatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl', 'mapUrl', 'pickupInstructions']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
+  async update(id: string, input: RestaurantInput, actorRole: Role) { input.orderWhatsapp = normalizeBrazilianWhatsApp(input.orderWhatsapp); if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentTypeId !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); if (input.establishmentTypeId) { input.establishmentTypeId = this.normalizeEstablishmentTypeId(input.establishmentTypeId); await this.requireActiveType(input.establishmentTypeId); } const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'orderWhatsapp', 'instagram', 'address', 'description', 'logoUrl', 'bannerUrl', 'mapUrl', 'pickupInstructions']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
   async updateSettings(id: string, input: Partial<RestaurantSettings>) {
     await this.ensureRestaurant(id);
     const restaurantId = new Types.ObjectId(id);
@@ -367,7 +380,13 @@ export class RestaurantsService {
 
   private async resolveTypes<T extends Record<string, any>>(items: T[]): Promise<T[]> { if (!this.establishmentTypes) return items; const ids = items.map(item => item.establishmentTypeId).filter(Boolean); if (!ids.length) return items; const definitions = await this.establishmentTypes.find({ _id: { $in: ids } }).select('name slug active').lean(); const byId = new Map(definitions.map(item => [item._id.toString(), item])); return items.map(item => ({ ...item, establishmentTypeId: byId.get(item.establishmentTypeId?.toString()) ?? item.establishmentTypeId })); }
 
-  private async requireActiveType(id: string) { if (!Types.ObjectId.isValid(id) || !(await this.establishmentTypes.exists({ _id: id, active: true }))) throw new BadRequestException('O tipo selecionado não existe ou está desativado.'); }
+  private normalizeEstablishmentTypeId(value: string | Types.ObjectId): Types.ObjectId {
+    const id = value.toString();
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('O tipo selecionado possui um identificador inválido.');
+    return new Types.ObjectId(id);
+  }
+
+  private async requireActiveType(id: Types.ObjectId) { if (!(await this.establishmentTypes.exists({ _id: id, active: true }))) throw new BadRequestException('O tipo selecionado não existe ou está desativado.'); }
 
   private async validateLocation(state?: string, city?: string) {
     if (!state || !city) throw new BadRequestException('Estado e cidade válidos são obrigatórios.');

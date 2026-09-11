@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -79,6 +79,7 @@ export class CatalogController {
   products(@Param('restaurantId') id: string) { return this.catalog.productsFor(id); }
 
   @Get('menu')
+  @Header('Cache-Control', 'no-store, max-age=0')
   menu(@Param('restaurantId') id: string) { return this.catalog.publicMenu(id); }
 
   @Post('categories')

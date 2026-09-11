@@ -57,11 +57,27 @@ export class CatalogService {
 
   async publicMenu(restaurantId: string) {
     const rid = this.restaurantObjectId(restaurantId);
-    const categories = await this.categories.find({ restaurantId: rid, active: true, archivedAt: { $exists: false } }).sort({ order: 1, _id: 1 }).lean();
-    const products = await this.products
-      .find({ restaurantId: rid, available: true, archivedAt: { $exists: false }, categoryId: { $in: categories.map((category) => category._id) } })
-      .sort({ order: 1, _id: 1 })
-      .lean();
+    const [categories, availableProducts] = await Promise.all([
+      this.categories
+        .find({ restaurantId: rid, active: true, archivedAt: { $exists: false } })
+        .sort({ order: 1, _id: 1 })
+        .lean(),
+      // Do not filter categoryId inside MongoDB here. Older records may still carry a
+      // string categoryId even though the current schema uses ObjectId. Filtering in
+      // memory after normalising the id keeps the public menu compatible without ever
+      // exposing products from inactive/archived categories.
+      this.products
+        .find({ restaurantId: rid, available: true, archivedAt: { $exists: false } })
+        .sort({ order: 1, _id: 1 })
+        .lean(),
+    ]);
+
+    const activeCategoryIds = new Set(categories.map((category) => category._id.toString()));
+    const products = availableProducts.filter((product) => {
+      const categoryId = this.idString(product.categoryId);
+      return Boolean(categoryId && activeCategoryIds.has(categoryId));
+    });
+
     return { categories, products };
   }
 
@@ -214,6 +230,19 @@ export class CatalogService {
       })),
     );
     return { updated: items.length };
+  }
+
+  private idString(value: unknown): string | undefined {
+    if (!value) return undefined;
+    if (typeof value === 'string') return value;
+    if (value instanceof Types.ObjectId) return value.toString();
+    if (typeof value === 'object' && '_id' in value) {
+      const nested = (value as { _id?: unknown })._id;
+      if (typeof nested === 'string') return nested;
+      if (nested instanceof Types.ObjectId) return nested.toString();
+    }
+    const text = String(value);
+    return Types.ObjectId.isValid(text) ? text : undefined;
   }
 
   private restaurantObjectId(restaurantId: string) {

@@ -54,6 +54,12 @@ export const transitions: Record<string, string[]> = {
   REJECTED: [],
   CANCELLED: [],
 };
+export const orderGroups: Record<string, string[]> = {
+  pending: ["PENDING"],
+  in_progress: ["ACCEPTED", "PREPARING", "READY", "OUT_FOR_DELIVERY"],
+  completed: ["COMPLETED"],
+  cancelled: ["REJECTED", "CANCELLED"],
+};
 const cents = (modern: number | undefined, legacy: number | undefined) =>
   modern ?? Math.round((legacy ?? 0) * 100);
 export function expectedChangeCents(
@@ -509,6 +515,24 @@ export class OrdersService {
       .sort({ createdAt: -1 })
       .limit(200)
       .lean();
+  }
+  async listGrouped(restaurantId: string, group: string, requestedPage = 1, requestedLimit = 10) {
+    const rid = this.objectId(restaurantId, "Estabelecimento inválido.");
+    const page = Math.max(1, requestedPage);
+    const limit = Math.min(50, Math.max(1, requestedLimit));
+    const statuses = orderGroups[group];
+    if (!statuses) throw new BadRequestException("Grupo de pedidos inválido.");
+    const base = { restaurantId: rid };
+    const filter = { ...base, status: { $in: statuses } };
+    const [items, total, pending, inProgress, completed, cancelled] = await Promise.all([
+      this.orders.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      this.orders.countDocuments(filter),
+      this.orders.countDocuments({ ...base, status: { $in: orderGroups.pending } }),
+      this.orders.countDocuments({ ...base, status: { $in: orderGroups.in_progress } }),
+      this.orders.countDocuments({ ...base, status: { $in: orderGroups.completed } }),
+      this.orders.countDocuments({ ...base, status: { $in: orderGroups.cancelled } }),
+    ]);
+    return { items, page, limit, total, hasMore: page * limit < total, counts: { pending, inProgress, completed, cancelled } };
   }
   forCustomer(customerId: string) {
     const uid = this.objectId(customerId, "Cliente inválido.");

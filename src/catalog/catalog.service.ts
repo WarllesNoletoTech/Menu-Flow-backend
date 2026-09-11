@@ -194,6 +194,19 @@ export class CatalogService {
     return category;
   }
 
+  async deleteProduct(restaurantId: string, id: string) {
+    const rid = this.restaurantObjectId(restaurantId);
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Produto não encontrado.');
+    const product = await this.products.findOneAndDelete({
+      _id: new Types.ObjectId(id),
+      restaurantId: rid,
+      archivedAt: { $exists: false },
+    }).lean();
+    if (!product) throw new NotFoundException('Produto não encontrado.');
+    await this.normalizeCategoryOrders(rid, product.categoryId);
+    return { deleted: true, id: product._id.toString() };
+  }
+
   async archiveProduct(restaurantId: string, id: string) {
     const rid = this.restaurantObjectId(restaurantId);
     if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Produto não encontrado.');

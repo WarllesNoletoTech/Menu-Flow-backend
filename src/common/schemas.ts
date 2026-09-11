@@ -360,6 +360,7 @@ export class BillingReport {
   @Prop({ type: Types.ObjectId, ref: "User", required: true })
   generatedBy!: Types.ObjectId;
   @Prop() pdfGeneratedAt?: Date;
+  @Prop() merchantViewedAt?: Date;
   @Prop() paidAt?: Date;
   @Prop({ type: Types.ObjectId, ref: "User" }) paidBy?: Types.ObjectId;
   @Prop() cancelledAt?: Date;
@@ -375,6 +376,7 @@ export class BillingReport {
 }
 export const BillingReportSchema = SchemaFactory.createForClass(BillingReport);
 BillingReportSchema.index({ restaurantId: 1, periodStart: -1 });
+BillingReportSchema.index({ restaurantId: 1, status: 1, merchantViewedAt: 1 });
 
 @Schema({ timestamps: true })
 export class ServiceReportItem {

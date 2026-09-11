@@ -485,3 +485,264 @@ export function renderBillingReportPdf(
   );
   return Buffer.concat(chunks);
 }
+
+type MerchantSalesReportPdf = {
+  periodStart: Date | string;
+  periodEnd: Date | string;
+  timezone: string;
+  restaurantSnapshot?: {
+    name?: string;
+    tradeName?: string;
+    cnpj?: string;
+    city?: string;
+    state?: string;
+  };
+  salesMetrics: {
+    completedOrders: number;
+    grossRevenueCents: number;
+    menuFlowServiceFeesCollectedCents: number;
+    grossOrderVolumeCents: number;
+    averageTicketCents: number;
+    cancelledOrders: number;
+  };
+  details: {
+    subtotalCents: number;
+    deliveryFeesCents: number;
+    discountsCents: number;
+    products: Array<{ productName: string; quantity: number; productRevenueCents: number }>;
+    paymentMethods: Array<{ method: string; orders: number; salesCents: number }>;
+    fulfillments: Array<{ fulfillment: string; orders: number; salesCents: number }>;
+    daily: Array<{ date: string; orders: number; salesCents: number }>;
+  };
+};
+
+type SalesPdfLine =
+  | { kind: "section"; title: string }
+  | { kind: "metric"; label: string; value: string; strong?: boolean }
+  | { kind: "tableHeader"; first: string; second: string; third: string }
+  | { kind: "tableRow"; first: string; second: string; third: string; strong?: boolean }
+  | { kind: "space"; height?: number };
+
+const salesPaymentLabel = (method: string) => {
+  const labels: Record<string, string> = {
+    CASH: "Dinheiro",
+    PIX: "PIX",
+    CREDIT_CARD: "Cartão de crédito",
+    DEBIT_CARD: "Cartão de débito",
+    ONLINE: "Pagamento online",
+  };
+  return labels[method] ?? method;
+};
+
+const clipPdfText = (value: unknown, max = 48) => {
+  const text = Array.from(normalizePdfText(value))
+    .map((char) => {
+      const code = char.codePointAt(0)!;
+      return code <= 0xff || cp1252[code] !== undefined ? char : "?";
+    })
+    .join("");
+  return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`;
+};
+
+export function renderMerchantSalesReportPdf(report: MerchantSalesReportPdf, logo?: Buffer) {
+  const snapshot = report.restaurantSnapshot ?? {};
+  const businessName = snapshot.tradeName || snapshot.name || "Estabelecimento";
+  const location = [snapshot.city, snapshot.state].filter(Boolean).join(" - ");
+  const emittedAt = new Date();
+
+  const lines: SalesPdfLine[] = [
+    { kind: "section", title: "IDENTIFICAÇÃO DO RELATÓRIO" },
+    { kind: "metric", label: "Estabelecimento", value: String(businessName), strong: true },
+    ...(snapshot.cnpj ? [{ kind: "metric", label: "CNPJ", value: String(snapshot.cnpj) } as SalesPdfLine] : []),
+    ...(location ? [{ kind: "metric", label: "Localidade", value: location } as SalesPdfLine] : []),
+    { kind: "metric", label: "Período", value: `${date(report.periodStart, report.timezone)} a ${date(report.periodEnd, report.timezone)}` },
+    { kind: "metric", label: "Emissão", value: `${date(emittedAt, report.timezone)} ${time(emittedAt, report.timezone)}` },
+    { kind: "space", height: 8 },
+    { kind: "section", title: "RESUMO FINANCEIRO" },
+    { kind: "metric", label: "Pedidos concluídos", value: String(report.salesMetrics.completedOrders) },
+    { kind: "metric", label: "Faturamento de vendas", value: money(report.salesMetrics.grossRevenueCents), strong: true },
+    { kind: "metric", label: "Taxas Menu Flow a repassar", value: money(report.salesMetrics.menuFlowServiceFeesCollectedCents) },
+    { kind: "metric", label: "Total transacionado", value: money(report.salesMetrics.grossOrderVolumeCents), strong: true },
+    { kind: "metric", label: "Ticket médio", value: money(report.salesMetrics.averageTicketCents) },
+    { kind: "metric", label: "Pedidos cancelados", value: String(report.salesMetrics.cancelledOrders) },
+    { kind: "metric", label: "Taxas de entrega", value: money(report.details.deliveryFeesCents) },
+    { kind: "metric", label: "Descontos concedidos", value: money(report.details.discountsCents) },
+    { kind: "space", height: 8 },
+    { kind: "section", title: "PRODUTOS VENDIDOS" },
+    { kind: "tableHeader", first: "PRODUTO", second: "QUANTIDADE", third: "VALOR" },
+    ...report.details.products.map((item) => ({
+      kind: "tableRow" as const,
+      first: item.productName || "Produto",
+      second: String(item.quantity),
+      third: money(item.productRevenueCents),
+    })),
+    ...(report.details.products.length ? [] : [{ kind: "tableRow", first: "Nenhum produto vendido no período", second: "-", third: "-" } as SalesPdfLine]),
+    { kind: "tableRow", first: "Subtotal dos produtos", second: "", third: money(report.details.subtotalCents), strong: true },
+    { kind: "space", height: 8 },
+    { kind: "section", title: "FORMAS DE PAGAMENTO" },
+    { kind: "tableHeader", first: "FORMA", second: "PEDIDOS", third: "FATURAMENTO" },
+    ...report.details.paymentMethods.map((item) => ({ kind: "tableRow" as const, first: salesPaymentLabel(item.method), second: String(item.orders), third: money(item.salesCents) })),
+    ...(report.details.paymentMethods.length ? [] : [{ kind: "tableRow", first: "Sem dados", second: "-", third: "-" } as SalesPdfLine]),
+    { kind: "space", height: 8 },
+    { kind: "section", title: "ENTREGA E RETIRADA" },
+    { kind: "tableHeader", first: "MODALIDADE", second: "PEDIDOS", third: "FATURAMENTO" },
+    ...report.details.fulfillments.map((item) => ({ kind: "tableRow" as const, first: item.fulfillment === "DELIVERY" ? "Entrega" : "Retirada", second: String(item.orders), third: money(item.salesCents) })),
+    ...(report.details.fulfillments.length ? [] : [{ kind: "tableRow", first: "Sem dados", second: "-", third: "-" } as SalesPdfLine]),
+    { kind: "space", height: 8 },
+    { kind: "section", title: "VENDAS POR DIA" },
+    { kind: "tableHeader", first: "DATA", second: "PEDIDOS", third: "FATURAMENTO" },
+    ...report.details.daily.map((item) => ({ kind: "tableRow" as const, first: date(`${item.date}T12:00:00Z`, report.timezone), second: String(item.orders), third: money(item.salesCents) })),
+    ...(report.details.daily.length ? [] : [{ kind: "tableRow", first: "Sem dados", second: "-", third: "-" } as SalesPdfLine]),
+  ];
+
+  const height = (line: SalesPdfLine) => line.kind === "section" ? 28 : line.kind === "space" ? (line.height ?? 8) : line.kind === "tableHeader" ? 23 : 19;
+  const BODY_TOP = 690;
+  const BODY_BOTTOM = 82;
+  const pages: SalesPdfLine[][] = [[]];
+  const pageCapacity = BODY_TOP - BODY_BOTTOM;
+  let used = 0;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (line.kind === "section") {
+      let blockHeight = 0;
+      for (let cursor = index; cursor < lines.length; cursor++) {
+        if (cursor > index && lines[cursor].kind === "section") break;
+        blockHeight += height(lines[cursor]);
+      }
+      if (blockHeight <= pageCapacity && used > 0 && used + blockHeight > pageCapacity) {
+        pages.push([]);
+        used = 0;
+      }
+    }
+    const h = height(line);
+    if (used + h > pageCapacity && pages[pages.length - 1].length) {
+      pages.push([]);
+      used = 0;
+    }
+    pages[pages.length - 1].push(line);
+    used += h;
+  }
+
+  const objects: Array<Buffer | string> = [];
+  const add = (value: Buffer | string) => { objects.push(value); return objects.length; };
+  const font = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+  const bold = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>");
+
+  let imageId: number | undefined;
+  let imageSize: { width: number; height: number } | undefined;
+  let maskId: number | undefined;
+  if (logo) {
+    const image = pngImage(logo);
+    imageSize = image;
+    if (image.alpha) {
+      maskId = add(Buffer.concat([
+        Buffer.from(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${image.alpha.length} >>\nstream\n`),
+        image.alpha,
+        Buffer.from("\nendstream"),
+      ]));
+    }
+    imageId = add(Buffer.concat([
+      Buffer.from(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode${maskId ? ` /SMask ${maskId} 0 R` : ""} /Length ${image.rgb.length} >>\nstream\n`),
+      image.rgb,
+      Buffer.from("\nendstream"),
+    ]));
+  }
+
+  const pageIds: number[] = [];
+  const contents: number[] = [];
+  pages.forEach((pageLines, pageIndex) => {
+    const out: Buffer[] = [];
+    const raw = (value: string) => out.push(Buffer.from(value + "\n", "ascii"));
+    const t = (x: number, y: number, value: unknown, size = 9, isBold = false) => {
+      out.push(Buffer.from(`BT /${isBold ? "B" : "F"} ${size} Tf ${x} ${y} Td (`, "ascii"), encodeWinAnsi(value), Buffer.from(") Tj ET\n", "ascii"));
+    };
+    const tRight = (right: number, y: number, value: unknown, size = 9, isBold = false) => t(Math.max(MARGIN_LEFT, right - approximateWidth(value, size)), y, value, size, isBold);
+    const line = (y: number, branded = false) => raw(`${branded ? `${BRAND_R} ${BRAND_G} ${BRAND_B}` : "0.82 0.79 0.75"} RG ${MARGIN_LEFT} ${y} m ${CONTENT_RIGHT} ${y} l S`);
+
+    raw("0.35 0.32 0.30 rg");
+    tRight(CONTENT_RIGHT, PAGE_HEIGHT - 35, `Página ${pageIndex + 1} de ${pages.length}`, 8);
+    raw(`${BRAND_R} ${BRAND_G} ${BRAND_B} rg`);
+    if (imageId && imageSize) {
+      const maxW = 155;
+      const maxH = 52;
+      const scale = Math.min(maxW / imageSize.width, maxH / imageSize.height);
+      const w = imageSize.width * scale;
+      const h = imageSize.height * scale;
+      raw(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${MARGIN_LEFT} ${(PAGE_HEIGHT - MARGIN_TOP + 13 - h).toFixed(2)} cm /Logo Do Q`);
+    } else {
+      t(MARGIN_LEFT, 775, "Menu Flow", 16, true);
+    }
+    tRight(CONTENT_RIGHT, 778, "RELATÓRIO DE FATURAMENTO", 13, true);
+    raw("0.16 0.14 0.13 rg");
+    tRight(CONTENT_RIGHT, 760, clipPdfText(businessName, 38), 8, true);
+    line(710, true);
+
+    let y = BODY_TOP;
+    for (const entry of pageLines) {
+      if (entry.kind === "space") {
+        y -= entry.height ?? 8;
+        continue;
+      }
+      if (entry.kind === "section") {
+        raw(`${BRAND_R} ${BRAND_G} ${BRAND_B} rg`);
+        t(MARGIN_LEFT, y, entry.title, 10.5, true);
+        raw("0.16 0.14 0.13 rg");
+        y -= 9;
+        line(y, true);
+        y -= 19;
+        continue;
+      }
+      if (entry.kind === "metric") {
+        t(MARGIN_LEFT, y, clipPdfText(entry.label, 46), 9, entry.strong ?? false);
+        tRight(CONTENT_RIGHT, y, clipPdfText(entry.value, 48), 9, entry.strong ?? false);
+        y -= 19;
+        continue;
+      }
+      if (entry.kind === "tableHeader") {
+        raw("0.35 0.32 0.30 rg");
+        t(MARGIN_LEFT, y, entry.first, 7.5, true);
+        tRight(MARGIN_LEFT + 330, y, entry.second, 7.5, true);
+        tRight(CONTENT_RIGHT, y, entry.third, 7.5, true);
+        y -= 8;
+        line(y);
+        y -= 15;
+        continue;
+      }
+      t(MARGIN_LEFT, y, clipPdfText(entry.first, 43), 8.5, entry.strong ?? false);
+      tRight(MARGIN_LEFT + 330, y, clipPdfText(entry.second, 16), 8.5, entry.strong ?? false);
+      tRight(CONTENT_RIGHT, y, clipPdfText(entry.third, 22), 8.5, entry.strong ?? false);
+      y -= 19;
+    }
+
+    raw("0.45 0.42 0.40 rg");
+    line(MARGIN_BOTTOM - 4);
+    t(MARGIN_LEFT, 37, "Menu Flow - Relatório gerado pelo painel do estabelecimento.", 7);
+    tRight(CONTENT_RIGHT, 37, `${date(report.periodStart, report.timezone)} a ${date(report.periodEnd, report.timezone)}`, 7);
+
+    const stream = Buffer.concat(out);
+    contents.push(add(Buffer.concat([Buffer.from(`<< /Length ${stream.length} >>\nstream\n`), stream, Buffer.from("endstream")])));
+    pageIds.push(add(""));
+  });
+
+  const pagesId = add("");
+  pageIds.forEach((id, index) => {
+    objects[id - 1] = `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] /Resources << /Font << /F ${font} 0 R /B ${bold} 0 R >>${imageId ? ` /XObject << /Logo ${imageId} 0 R >>` : ""} >> /Contents ${contents[index]} 0 R >>`;
+  });
+  objects[pagesId - 1] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pages.length} >>`;
+  const catalog = add(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  const chunks = [Buffer.from("%PDF-1.4\n%MENUFLOW\n")];
+  const offsets = [0];
+  let offset = chunks[0].length;
+  objects.forEach((object, index) => {
+    offsets.push(offset);
+    const body = Buffer.isBuffer(object) ? object : Buffer.from(object);
+    const chunk = Buffer.concat([Buffer.from(`${index + 1} 0 obj\n`), body, Buffer.from("\nendobj\n")]);
+    chunks.push(chunk);
+    offset += chunk.length;
+  });
+  const xref = offset;
+  let table = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let index = 1; index < offsets.length; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  chunks.push(Buffer.from(`${table}trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`));
+  return Buffer.concat(chunks);
+}

@@ -34,7 +34,7 @@ import {
   DEFAULT_BILLING_TIMEZONE,
   isFirstTuesday,
 } from "./billing-rules";
-import { renderBillingReportPdf } from "./billing-pdf";
+import { renderBillingReportPdf, renderMerchantSalesReportPdf } from "./billing-pdf";
 import { zonedDateRange } from "../common/date-range";
 
 export function sumOrderServiceFees(
@@ -873,7 +873,7 @@ export class BillingService {
 
   async merchantSalesReport(restaurantId: string, startDate: string, endDate: string) {
     const rid = this.objectId(restaurantId);
-    const restaurant = await this.restaurants.findById(rid).select("timezone").lean();
+    const restaurant = await this.restaurants.findById(rid).select("name tradeName cnpj city state timezone").lean();
     if (!restaurant) throw new NotFoundException("Estabelecimento não encontrado.");
     const timezone = restaurant.timezone || 'America/Sao_Paulo';
     const { start, end } = zonedDateRange(startDate, endDate, timezone);
@@ -945,6 +945,13 @@ export class BillingService {
       periodStart: start,
       periodEnd: end,
       timezone,
+      restaurantSnapshot: {
+        name: restaurant.name,
+        tradeName: restaurant.tradeName,
+        cnpj: restaurant.cnpj,
+        city: restaurant.city,
+        state: restaurant.state,
+      },
       salesMetrics: {
         completedOrders,
         grossSalesCents,
@@ -964,6 +971,46 @@ export class BillingService {
         daily: Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
       },
     };
+  }
+
+  async merchantSalesReportPdf(restaurantId: string, startDate: string, endDate: string) {
+    const data = await this.merchantSalesReport(restaurantId, startDate, endDate);
+    let pdf: Buffer;
+    const logo = await this.billingLogo();
+    try {
+      pdf = renderMerchantSalesReportPdf(data, logo);
+    } catch (error) {
+      if (!logo) throw error;
+      this.logger.warn(
+        `Logo oficial inválida ou incompatível no PDF de faturamento; usando fallback textual: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      this.logoCache = undefined;
+      pdf = renderMerchantSalesReportPdf(data);
+    }
+    return { pdf, filename: `faturamento-${startDate}-a-${endDate}.pdf` };
+  }
+
+  async merchantUnreadReports(restaurantId: string) {
+    const rid = this.objectId(restaurantId);
+    const count = await this.reports.countDocuments({
+      restaurantId: rid,
+      status: { $in: [BillingReportStatus.GENERATED, BillingReportStatus.PAID] },
+      $or: [{ merchantViewedAt: { $exists: false } }, { merchantViewedAt: null }],
+    });
+    return { count };
+  }
+
+  async markMerchantReportsViewed(restaurantId: string) {
+    const rid = this.objectId(restaurantId);
+    const result = await this.reports.updateMany(
+      {
+        restaurantId: rid,
+        status: { $in: [BillingReportStatus.GENERATED, BillingReportStatus.PAID] },
+        $or: [{ merchantViewedAt: { $exists: false } }, { merchantViewedAt: null }],
+      },
+      { $set: { merchantViewedAt: new Date() } },
+    );
+    return { updated: result.modifiedCount };
   }
 
   async merchant(restaurantId: string, period: string) {

@@ -137,6 +137,22 @@ export class BillingController {
   ) {
     return this.billing.merchantSalesReport(r.user.restaurantId, start, end);
   }
+  @Get("me/sales-report/pdf")
+  @Header("Cache-Control", "no-store, private")
+  @Roles(Role.RESTAURANT_ADMIN)
+  async merchantSalesReportPdf(
+    @Req() r: { user: { restaurantId: string } },
+    @Query("start") start: string,
+    @Query("end") end: string,
+    @Res() res: any,
+  ) {
+    const out = await this.billing.merchantSalesReportPdf(r.user.restaurantId, start, end);
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${out.filename}"`,
+    });
+    res.send(out.pdf);
+  }
 
   @Get("me")
   @Header("Cache-Control", "no-store, private")
@@ -220,6 +236,18 @@ export class BillingController {
   @Roles(Role.RESTAURANT_ADMIN)
   myReports(@Req() r: { user: { restaurantId: string } }) {
     return this.billing.listReports({}, r.user.restaurantId);
+  }
+  @Get("me/reports/unread-count")
+  @Header("Cache-Control", "no-store, private")
+  @Roles(Role.RESTAURANT_ADMIN)
+  myUnreadReports(@Req() r: { user: { restaurantId: string } }) {
+    return this.billing.merchantUnreadReports(r.user.restaurantId);
+  }
+  @Patch("me/reports/viewed")
+  @Header("Cache-Control", "no-store, private")
+  @Roles(Role.RESTAURANT_ADMIN)
+  markMyReportsViewed(@Req() r: { user: { restaurantId: string } }) {
+    return this.billing.markMerchantReportsViewed(r.user.restaurantId);
   }
   @Get("me/reports/:id/pdf")
   @Header("Cache-Control", "no-store, private")

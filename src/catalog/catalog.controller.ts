@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -126,6 +126,13 @@ export class CatalogController {
   }
 
 
+  @Delete('products/:productId')
+  @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN)
+  @UseGuards(JwtGuard, TenantGuard, RolesGuard)
+  deleteProduct(@Param('restaurantId') restaurantId: string, @Param('productId') id: string) {
+    return this.catalog.deleteProduct(restaurantId, id);
+  }
+
   @Patch('products/:productId/archive')
   @Roles(Role.RESTAURANT_ADMIN, Role.SUPER_ADMIN)
   @UseGuards(JwtGuard, TenantGuard, RolesGuard)
@@ -181,6 +188,11 @@ export class MerchantCatalogController {
     return this.catalog.updateProduct(request.user.restaurantId, id, body);
   }
 
+  @Delete('products/:productId')
+  deleteProduct(@Req() request: MerchantRequest, @Param('productId') id: string) {
+    return this.catalog.deleteProduct(request.user.restaurantId, id);
+  }
+
   @Patch('products/:productId/archive')
   archiveProduct(@Req() request: MerchantRequest, @Param('productId') id: string) {
     return this.catalog.archiveProduct(request.user.restaurantId, id);
@@ -202,5 +214,6 @@ export class AdminCatalogController {
   @Post('products') createProduct(@Param('restaurantId') id: string, @Body() body: CreateProductDto) { return this.catalog.createProduct(id, body); }
   @Patch('products/reorder') reorderProducts(@Param('restaurantId') id: string, @Body() body: ReorderItemDto[]) { return this.catalog.reorderProducts(id, body); }
   @Patch('products/:productId') updateProduct(@Param('restaurantId') id: string, @Param('productId') productId: string, @Body() body: UpdateProductDto) { return this.catalog.updateProduct(id, productId, body); }
+  @Delete('products/:productId') deleteProduct(@Param('restaurantId') id: string, @Param('productId') productId: string) { return this.catalog.deleteProduct(id, productId); }
   @Patch('products/:productId/archive') archiveProduct(@Param('restaurantId') id: string, @Param('productId') productId: string) { return this.catalog.archiveProduct(id, productId); }
 }

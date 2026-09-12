@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsEnum, IsIn, IsInt, IsMongoId, IsNumber, IsOptional, IsString, IsUrl, Matches, Max, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { JwtGuard } from '../auth/jwt.guard';
 import { Role } from '../common/roles';
@@ -8,11 +8,13 @@ import { DeliveryCoverageType } from '../common/schemas';
 import { TenantGuard } from '../common/tenant.guard';
 import { RestaurantsService } from './restaurants.service';
 
+const normalizeRestaurantSlug = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').replace(/-{2,}/g, '-');
+
 const optionalHttpsUrl = () => IsUrl({ protocols: ['https'], require_protocol: true, require_valid_protocol: true }, { message: 'A URL deve ser um link HTTPS válido.' });
 
 class CreateRestaurantDto {
   @IsString() @MinLength(1) name!: string;
-  @Matches(/^[a-z0-9-]+$/) slug!: string;
+  @Transform(({ value }) => normalizeRestaurantSlug(String(value ?? ''))) @Matches(/^[a-z0-9-]+$/, { message: 'O endereço público deve conter apenas letras, números e hífen.' }) slug!: string;
   @IsOptional() @IsString() tradeName?: string;
   @IsOptional() @IsString() cnpj?: string;
   @IsOptional() @ValidateIf((_, value) => value !== '') @IsEmail() email?: string;

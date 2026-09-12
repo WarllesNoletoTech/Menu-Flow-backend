@@ -10,6 +10,8 @@ import { canAcceptOrdersNow, DEFAULT_TIMEZONE, openingStatus, validateBusinessHo
 import { normalizeBrazilianWhatsApp } from '../orders/order-whatsapp';
 import { normalizeReportWhatsapp } from '../users/report-whatsapp';
 import { MENU_FLOW_ORDER_SERVICE_FEE_CENTS } from '../billing/billing-rules';
+const normalizeRestaurantSlug = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').replace(/-{2,}/g, '-');
+
 type RestaurantInput = Omit<Partial<Restaurant>, 'establishmentTypeId'> & { establishmentTypeId?: string | Types.ObjectId };
 
 @Injectable()
@@ -19,6 +21,8 @@ export class RestaurantsService {
 
   async create(input: Pick<Restaurant, 'name' | 'slug'> & RestaurantInput) {
     try {
+      input.slug = normalizeRestaurantSlug(input.slug || input.name);
+      if (!input.slug) throw new BadRequestException('Não foi possível gerar um endereço público válido para o estabelecimento.');
       if (input.establishmentTypeId) {
         input.establishmentTypeId = this.normalizeEstablishmentTypeId(input.establishmentTypeId);
         await this.requireActiveType(input.establishmentTypeId);
@@ -36,7 +40,7 @@ export class RestaurantsService {
 
   async createWithOwner(input: Pick<Restaurant, 'name' | 'slug' | 'city' | 'state'> & RestaurantInput & { establishmentTypeId: string | Types.ObjectId }, owner: { name: string; email: string; phone?: string; reportWhatsapp: string; password: string }) {
     const email = owner.email.trim().toLowerCase();
-    input.slug = input.slug.trim().toLowerCase();
+    input.slug = normalizeRestaurantSlug(input.slug || input.name);
     if (!input.name.trim() || !input.establishmentTypeId) throw new BadRequestException('Nome e tipo do estabelecimento são obrigatórios.');
     await this.validateLocation(input.state, input.city);
     if (await this.restaurants.exists({ slug: input.slug })) throw new ConflictException('Já existe um estabelecimento com este slug.');
@@ -138,6 +142,11 @@ export class RestaurantsService {
     }
     const currentRestaurant = await this.restaurants.findById(restaurantId).lean();
     if (!currentRestaurant) throw new NotFoundException('Estabelecimento não encontrado.');
+    if (establishment.slug !== undefined) {
+      establishment.slug = normalizeRestaurantSlug(String(establishment.slug || establishment.name || currentRestaurant.name));
+      if (!establishment.slug) throw new BadRequestException('Não foi possível gerar um endereço público válido para o estabelecimento.');
+      if (await this.restaurants.exists({ slug: establishment.slug, _id: { $ne: currentRestaurant._id } })) throw new ConflictException('Já existe um estabelecimento com este slug.');
+    }
     let currentOwner: UserDocument | null = null;
     if (owner) {
       if (!Types.ObjectId.isValid(owner.userId)) throw new NotFoundException('Lojista não encontrado.');
@@ -149,7 +158,7 @@ export class RestaurantsService {
       }
     }
     establishment.orderWhatsapp = normalizeBrazilianWhatsApp(establishment.orderWhatsapp);
-    const restaurantChanges = updateDocument(establishment, ['name', 'tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'orderWhatsapp', 'instagram', 'address', 'state', 'city', 'description', 'logoUrl', 'bannerUrl', 'bannerDesktopUrl', 'bannerMobileUrl', 'mapUrl', 'pickupInstructions']);
+    const restaurantChanges = updateDocument(establishment, ['name', 'slug', 'tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'orderWhatsapp', 'instagram', 'address', 'state', 'city', 'description', 'logoUrl', 'bannerUrl', 'bannerDesktopUrl', 'bannerMobileUrl', 'mapUrl', 'pickupInstructions']);
     try {
       const updatedRestaurant = await this.restaurants.findByIdAndUpdate(restaurantId, restaurantChanges, { new: true, runValidators: true });
       if (!updatedRestaurant) throw new NotFoundException('Estabelecimento não encontrado.');
@@ -301,7 +310,22 @@ export class RestaurantsService {
 
   async bySlug(slug: string): Promise<Record<string, unknown>> { const restaurant = await this.restaurants.findOne({ slug, blocked: false }).select('name slug tradeName address city state mapUrl pickupInstructions logoUrl bannerUrl bannerDesktopUrl bannerMobileUrl description phone orderWhatsapp instagram establishmentType establishmentTypeId restaurantCategories timezone open blocked').lean(); if (!restaurant) throw new NotFoundException('Establishment not found'); const [resolvedRestaurant] = await this.resolveTypes([restaurant]); const [settings, deliveryZones, paymentMethods] = await Promise.all([this.settings.findOne({ restaurantId: restaurant._id }).select('openingHours minimumOrder minimumOrderCents pickupEnabled deliveryEnabled').lean(), this.deliveryZones.find({ restaurantId: restaurant._id, active: true }).select('name coverageType fee feeCents active').sort({ name: 1 }).lean(), this.payments.find({ restaurantId: restaurant._id, active: true }).select('name method active').sort({ method: 1 }).lean()]); const businessHours = settings?.openingHours ?? []; const delivery = deliveryAvailability(settings?.deliveryEnabled ?? false, deliveryZones.length); return { ...withResolvedType(resolvedRestaurant), timezone: restaurant.timezone || DEFAULT_TIMEZONE, deliveryZones, paymentMethods, pickupEnabled: settings?.pickupEnabled ?? true, ...delivery, minimumOrderCents: settings?.minimumOrderCents ?? Math.round((settings?.minimumOrder ?? 0) * 100), customerServiceFeeCents: MENU_FLOW_ORDER_SERVICE_FEE_CENTS, ...restaurantAvailability(businessHours, restaurant.timezone, restaurant.open, restaurant.blocked) }; }
   async ensureAcceptingOrders(restaurantId: string) { if (!Types.ObjectId.isValid(restaurantId)) throw new NotFoundException('Restaurant not found'); const restaurant = await this.restaurants.findOne({ _id: restaurantId, blocked: false }).lean(); if (!restaurant) throw new NotFoundException('Restaurant not found'); const settings = await this.settings.findOne({ restaurantId }).lean(); return { restaurant, settings }; }
-  async update(id: string, input: RestaurantInput, actorRole: Role) { input.orderWhatsapp = normalizeBrazilianWhatsApp(input.orderWhatsapp); if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentTypeId !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.'); if (input.establishmentTypeId) { input.establishmentTypeId = this.normalizeEstablishmentTypeId(input.establishmentTypeId); await this.requireActiveType(input.establishmentTypeId); } const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['name', 'tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'orderWhatsapp', 'instagram', 'address', 'state', 'city', 'description', 'logoUrl', 'bannerUrl', 'bannerDesktopUrl', 'bannerMobileUrl', 'mapUrl', 'pickupInstructions']), { new: true, runValidators: true }); if (!restaurant) throw new NotFoundException('Establishment not found'); return restaurant; }
+  async update(id: string, input: RestaurantInput, actorRole: Role) {
+    input.orderWhatsapp = normalizeBrazilianWhatsApp(input.orderWhatsapp);
+    if (actorRole !== Role.SUPER_ADMIN && (input.blocked !== undefined || input.establishmentTypeId !== undefined || input.establishmentType !== undefined || input.slug !== undefined)) throw new ForbiddenException('Somente administradores da plataforma podem alterar este campo.');
+    if (input.establishmentTypeId) {
+      input.establishmentTypeId = this.normalizeEstablishmentTypeId(input.establishmentTypeId);
+      await this.requireActiveType(input.establishmentTypeId);
+    }
+    if (input.slug !== undefined) {
+      input.slug = normalizeRestaurantSlug(String(input.slug || input.name || ''));
+      if (!input.slug) throw new BadRequestException('Não foi possível gerar um endereço público válido para o estabelecimento.');
+      if (await this.restaurants.exists({ slug: input.slug, _id: { $ne: id } })) throw new ConflictException('Já existe um estabelecimento com este slug.');
+    }
+    const restaurant = await this.restaurants.findByIdAndUpdate(id, updateDocument(input, ['name', 'slug', 'tradeName', 'cnpj', 'email', 'phone', 'whatsapp', 'orderWhatsapp', 'instagram', 'address', 'state', 'city', 'description', 'logoUrl', 'bannerUrl', 'bannerDesktopUrl', 'bannerMobileUrl', 'mapUrl', 'pickupInstructions']), { new: true, runValidators: true });
+    if (!restaurant) throw new NotFoundException('Establishment not found');
+    return restaurant;
+  }
   async updateSettings(id: string, input: Partial<RestaurantSettings>) {
     await this.ensureRestaurant(id);
     const restaurantId = new Types.ObjectId(id);

@@ -361,7 +361,6 @@ export class CatalogService {
 
   private normalizeAddonGroups(groups: AddonGroupInput[]): any[] {
     const groupNames = new Set<string>();
-    const addonNames = new Set<string>();
 
     return groups.map((group) => {
       const groupName = this.cleanRequiredName(group.name, 'Informe o nome de todos os grupos de adicionais.');
@@ -374,10 +373,11 @@ export class CatalogService {
       const max = group.max ?? 1;
       if (min < 0 || min > max || max > group.addons.length || (group.required && min < 1)) throw new BadRequestException(`Revise as quantidades do grupo “${groupName}”: grupos obrigatórios exigem no mínimo uma opção.`);
 
+      const addonNames = new Set<string>();
       const addons = group.addons.map((addon) => {
         const addonName = this.cleanRequiredName(addon.name, `Informe o nome de todas as opções do grupo “${groupName}”.`);
         const normalizedAddonName = addonName.toLocaleLowerCase('pt-BR');
-        if (addonNames.has(normalizedAddonName)) throw new BadRequestException(`A opção “${addonName}” está duplicada neste produto.`);
+        if (addonNames.has(normalizedAddonName)) throw new BadRequestException(`A opção “${addonName}” está duplicada no grupo “${groupName}”.`);
         addonNames.add(normalizedAddonName);
         return { ...(addon._id && Types.ObjectId.isValid(addon._id) ? { _id: new Types.ObjectId(addon._id) } : {}), name: addonName, price: addon.price, priceCents: Math.round(addon.price * 100) };
       });

@@ -52,6 +52,8 @@ export class Restaurant {
   @Prop({ uppercase: true, trim: true }) state?: string;
   @Prop() logoUrl?: string;
   @Prop() bannerUrl?: string;
+  @Prop() bannerDesktopUrl?: string;
+  @Prop() bannerMobileUrl?: string;
   @Prop() description?: string;
   @Prop() phone?: string;
   @Prop() whatsapp?: string;

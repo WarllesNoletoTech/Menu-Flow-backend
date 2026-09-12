@@ -27,6 +27,8 @@ class CreateRestaurantDto {
   @IsOptional() @IsString() instagram?: string;
   @IsOptional() @ValidateIf((_, value) => value !== '') @optionalHttpsUrl() logoUrl?: string;
   @IsOptional() @ValidateIf((_, value) => value !== '') @optionalHttpsUrl() bannerUrl?: string;
+  @IsOptional() @ValidateIf((_, value) => value !== '') @optionalHttpsUrl() bannerDesktopUrl?: string;
+  @IsOptional() @ValidateIf((_, value) => value !== '') @optionalHttpsUrl() bannerMobileUrl?: string;
   @IsOptional() @ValidateIf((_, value) => value !== '') @optionalHttpsUrl() mapUrl?: string;
   @IsOptional() @IsString() pickupInstructions?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) restaurantCategories?: string[];

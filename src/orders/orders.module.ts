@@ -5,9 +5,11 @@ import { AdminOrdersController, CustomerOrdersController, EmployeeOrdersControll
 import { OrdersGateway } from './orders.gateway';
 import { OrdersService } from './orders.service';
 import { AuthModule } from '../auth/auth.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
+import { OrdersRealtimeModule } from './orders-realtime.module';
 
 @Module({
-  imports: [AuthModule, MongooseModule.forFeature([
+  imports: [AuthModule, IntegrationsModule, OrdersRealtimeModule, MongooseModule.forFeature([
     { name: Order.name, schema: OrderSchema },
     { name: Category.name, schema: CategorySchema },
     { name: Product.name, schema: ProductSchema },
@@ -19,6 +21,6 @@ import { AuthModule } from '../auth/auth.module';
     { name: Payment.name, schema: PaymentSchema },
   ])],
   controllers: [OrdersController, AdminOrdersController, CustomerOrdersController, PublicOrderController, EmployeeOrdersController],
-  providers: [OrdersService, OrdersGateway],
+  providers: [OrdersService],
 })
 export class OrdersModule {}

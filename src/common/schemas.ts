@@ -258,6 +258,21 @@ export class Order {
   @Prop({ type: Types.ObjectId, ref: "User" }) acceptedBy?: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: "User" }) rejectedBy?: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: "User" }) completedBy?: Types.ObjectId;
+
+  // Rappidex metadata is kept separate from Menu Flow's own order status.
+  // Delivery orders can be dispatched asynchronously without blocking checkout.
+  @Prop({ default: false, index: true }) rappidexSyncRequested?: boolean;
+  @Prop({ trim: true }) rappidexSyncStatus?: string;
+  @Prop({ min: 0, default: 0 }) rappidexSyncAttempts?: number;
+  @Prop({ trim: true }) rappidexDeliveryId?: string;
+  @Prop({ trim: true }) rappidexStatus?: string;
+  @Prop() rappidexLastAttemptAt?: Date;
+  @Prop() rappidexSyncedAt?: Date;
+  @Prop() rappidexLastUpdateAt?: Date;
+  @Prop() rappidexSyncError?: string;
+  @Prop({ default: false, index: true }) rappidexCancelRequested?: boolean;
+  @Prop() rappidexMotoboyName?: string;
+  @Prop() rappidexMotoboyPhone?: string;
 }
 export const OrderSchema = SchemaFactory.createForClass(Order);
 OrderSchema.set("optimisticConcurrency", true);
@@ -267,6 +282,8 @@ OrderSchema.index({ restaurantId: 1, status: 1, completedAt: 1 });
 OrderSchema.index({ restaurantId: 1, status: 1, rejectedAt: 1 });
 OrderSchema.index({ restaurantId: 1, status: 1, cancelledAt: 1 });
 OrderSchema.index({ customerId: 1, createdAt: -1 });
+OrderSchema.index({ rappidexSyncRequested: 1, rappidexSyncStatus: 1, createdAt: 1 });
+OrderSchema.index({ rappidexCancelRequested: 1, createdAt: 1 });
 OrderSchema.pre("validate", function backfillLegacyMoney() {
   const order = this as unknown as Record<string, unknown>;
   for (const field of ["subtotal", "deliveryFee", "discount", "total"]) {

@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { ConfigService } from "@nestjs/config";
@@ -25,6 +26,7 @@ import { OrdersGateway } from "./orders.gateway";
 import { buildOrderWhatsAppMessage, buildWhatsAppUrl } from "./order-whatsapp";
 import { MENU_FLOW_ORDER_SERVICE_FEE_CENTS } from "../billing/billing-rules";
 import { zonedDateRange, type ZonedRange } from "../common/date-range";
+import { RappidexIntegrationService } from "../integrations/rappidex.service";
 
 export type CheckoutItem = {
   productId: string;
@@ -179,6 +181,8 @@ export class OrdersService {
     @InjectModel(Payment.name) private readonly payments: Model<Payment>,
     private readonly gateway: OrdersGateway,
     private readonly config: ConfigService,
+    @Optional()
+    private readonly rappidex?: RappidexIntegrationService,
   ) {}
 
   async create(
@@ -458,6 +462,10 @@ export class OrdersService {
             discountCents,
             total: totalCents / 100,
             totalCents,
+            rappidexSyncRequested: input.fulfillment === "DELIVERY",
+            rappidexSyncStatus: input.fulfillment === "DELIVERY" ? "PENDING" : undefined,
+            rappidexSyncAttempts: 0,
+            rappidexCancelRequested: false,
             status: "PENDING",
             statusHistory: [
               {
@@ -497,6 +505,9 @@ export class OrdersService {
         { upsert: true },
       );
       this.gateway.publishNewOrder(rid.toHexString(), order.toJSON());
+      if (input.fulfillment === "DELIVERY") {
+        this.rappidex?.queueOrder(order._id.toString());
+      }
       return this.checkoutResponse(order.toObject(), restaurant);
     } catch (error) {
       if ((error as { code?: number }).code === 11000 && idempotencyKey) {
@@ -693,6 +704,7 @@ export class OrdersService {
       order.customerId?.toString(),
       order.toJSON(),
     );
+    this.rappidex?.handleOrderStatusChange(order._id.toString(), status);
     return order;
   }
   async cancelByCustomer(customerId: string, id: string, reason?: string) {

@@ -149,6 +149,7 @@ export class AddonGroup {
   @Prop({ default: false }) required!: boolean;
   @Prop({ default: 0 }) min!: number;
   @Prop({ default: 1 }) max!: number;
+  @Prop({ enum: ["SUM", "MAX"], default: "SUM" }) pricingMode!: "SUM" | "MAX";
   @Prop({ type: [AddonSchema], default: [] }) addons!: Addon[];
 }
 export const AddonGroupSchema = SchemaFactory.createForClass(AddonGroup);

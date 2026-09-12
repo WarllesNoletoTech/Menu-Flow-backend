@@ -27,6 +27,7 @@ import { buildOrderWhatsAppMessage, buildWhatsAppUrl } from "./order-whatsapp";
 import { MENU_FLOW_ORDER_SERVICE_FEE_CENTS } from "../billing/billing-rules";
 import { zonedDateRange, type ZonedRange } from "../common/date-range";
 import { RappidexIntegrationService } from "../integrations/rappidex.service";
+import { applyAddonPricing } from "./addon-pricing";
 
 export type CheckoutItem = {
   productId: string;
@@ -330,6 +331,7 @@ export class OrdersService {
             `Seleção inválida no grupo ${group.name}.`,
           );
       }
+      const pricedAddons = applyAddonPricing(product.addonGroups as any[], selected);
       const unitPriceCents = cents(
         product.promotionalPriceCents,
         product.promotionalPrice ?? product.price,
@@ -340,7 +342,7 @@ export class OrdersService {
         unitPrice: unitPriceCents / 100,
         unitPriceCents,
         quantity: item.quantity,
-        addons: selected,
+        addons: pricedAddons,
         observation: item.observation?.trim(),
       };
     });

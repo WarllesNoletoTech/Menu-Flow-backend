@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsMongoId,
   IsNotEmpty,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -34,6 +35,7 @@ class AddonGroupDto {
   @IsOptional() @IsBoolean() required?: boolean;
   @IsOptional() @IsNumber() @Min(0) min?: number;
   @IsOptional() @IsNumber() @Min(1) max?: number;
+  @IsOptional() @IsIn(['SUM', 'MAX']) pricingMode?: 'SUM' | 'MAX';
   @IsArray() @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => AddonDto) addons!: AddonDto[];
 }
 

@@ -9,6 +9,7 @@ type AddonGroupInput = {
   required?: boolean;
   min?: number;
   max?: number;
+  pricingMode?: 'SUM' | 'MAX';
   addons: Array<{ _id?: string; name: string; price: number }>;
 };
 
@@ -381,7 +382,8 @@ export class CatalogService {
         return { ...(addon._id && Types.ObjectId.isValid(addon._id) ? { _id: new Types.ObjectId(addon._id) } : {}), name: addonName, price: addon.price, priceCents: Math.round(addon.price * 100) };
       });
 
-      return { ...(group._id && Types.ObjectId.isValid(group._id) ? { _id: new Types.ObjectId(group._id) } : {}), name: groupName, required: Boolean(group.required), min, max, addons };
+      const pricingMode = group.pricingMode === 'MAX' ? 'MAX' : 'SUM';
+      return { ...(group._id && Types.ObjectId.isValid(group._id) ? { _id: new Types.ObjectId(group._id) } : {}), name: groupName, required: Boolean(group.required), min, max, pricingMode, addons };
     });
   }
 }

@@ -15,6 +15,10 @@ class RappidexStatusEventDto {
 
   @IsOptional()
   @IsString()
+  statusLabel?: string;
+
+  @IsOptional()
+  @IsString()
   eventId?: string;
 
   @IsOptional()
@@ -28,6 +32,10 @@ class RappidexStatusEventDto {
   @IsOptional()
   @IsString()
   motoboyPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  reason?: string;
 }
 
 @Controller('integrations/rappidex')

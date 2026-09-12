@@ -266,10 +266,13 @@ export class Order {
   @Prop({ min: 0, default: 0 }) rappidexSyncAttempts?: number;
   @Prop({ trim: true }) rappidexDeliveryId?: string;
   @Prop({ trim: true }) rappidexStatus?: string;
+  @Prop({ trim: true }) rappidexStatusLabel?: string;
+  @Prop({ trim: true }) rappidexLastEventId?: string;
   @Prop() rappidexLastAttemptAt?: Date;
   @Prop() rappidexSyncedAt?: Date;
   @Prop() rappidexLastUpdateAt?: Date;
   @Prop() rappidexSyncError?: string;
+  @Prop({ default: false, index: true }) rappidexReleaseRequested?: boolean;
   @Prop({ default: false, index: true }) rappidexCancelRequested?: boolean;
   @Prop() rappidexMotoboyName?: string;
   @Prop() rappidexMotoboyPhone?: string;
@@ -283,6 +286,7 @@ OrderSchema.index({ restaurantId: 1, status: 1, rejectedAt: 1 });
 OrderSchema.index({ restaurantId: 1, status: 1, cancelledAt: 1 });
 OrderSchema.index({ customerId: 1, createdAt: -1 });
 OrderSchema.index({ rappidexSyncRequested: 1, rappidexSyncStatus: 1, createdAt: 1 });
+OrderSchema.index({ rappidexReleaseRequested: 1, createdAt: 1 });
 OrderSchema.index({ rappidexCancelRequested: 1, createdAt: 1 });
 OrderSchema.pre("validate", function backfillLegacyMoney() {
   const order = this as unknown as Record<string, unknown>;

@@ -462,9 +462,12 @@ export class OrdersService {
             discountCents,
             total: totalCents / 100,
             totalCents,
-            rappidexSyncRequested: input.fulfillment === "DELIVERY",
-            rappidexSyncStatus: input.fulfillment === "DELIVERY" ? "PENDING" : undefined,
+            // A entrega só é enviada para a Rappidex depois que o lojista aceita o pedido.
+            rappidexSyncRequested: false,
+            rappidexSyncStatus:
+              input.fulfillment === "DELIVERY" ? "WAITING_ACCEPTANCE" : undefined,
             rappidexSyncAttempts: 0,
+            rappidexReleaseRequested: false,
             rappidexCancelRequested: false,
             status: "PENDING",
             statusHistory: [
@@ -505,9 +508,6 @@ export class OrdersService {
         { upsert: true },
       );
       this.gateway.publishNewOrder(rid.toHexString(), order.toJSON());
-      if (input.fulfillment === "DELIVERY") {
-        this.rappidex?.queueOrder(order._id.toString());
-      }
       return this.checkoutResponse(order.toObject(), restaurant);
     } catch (error) {
       if ((error as { code?: number }).code === 11000 && idempotencyKey) {
@@ -667,6 +667,23 @@ export class OrdersService {
     if (order.fulfillment === "PICKUP" && status === "OUT_FOR_DELIVERY")
       throw new ConflictException(
         "Pedidos para retirada não saem para entrega.",
+      );
+    const hasRappidexDelivery =
+      order.fulfillment === "DELIVERY" && Boolean(order.rappidexDeliveryId);
+    const rappidexAssigned = this.rappidex?.isDeliveryAssignedStatus(
+      order.rappidexStatus,
+    );
+    if (hasRappidexDelivery && status === "OUT_FOR_DELIVERY")
+      throw new ConflictException(
+        "O andamento da entrega é controlado pela Rappidex.",
+      );
+    if (hasRappidexDelivery && status === "COMPLETED")
+      throw new ConflictException(
+        "A conclusão desta entrega será recebida automaticamente da Rappidex.",
+      );
+    if (hasRappidexDelivery && rappidexAssigned && status === "CANCELLED")
+      throw new ConflictException(
+        "A entrega já foi assumida por um motoboy. O cancelamento deve ser feito pela Rappidex.",
       );
     const now = new Date();
     order.status = status;

@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, MaxLength, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsNumber, IsObject, IsOptional, IsString } from 'class-validator';
+import { Body, Controller, Delete, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { IsBoolean, IsNumber, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 import { JwtGuard } from '../auth/jwt.guard';
 import { Role } from '../common/roles';
 import { Roles, RolesGuard } from '../common/roles.guard';

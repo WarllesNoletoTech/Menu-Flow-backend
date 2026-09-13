@@ -2,7 +2,7 @@
   "name": "@menu-flow/backend",
   "private": true,
   "engines": {
-    "node": "20.x"
+    "node": "22.x"
   },
   "scripts": {
     "create-super-admin": "npm run build && node dist/scripts/create-super-admin.js",

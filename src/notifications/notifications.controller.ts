@@ -19,6 +19,11 @@ class PushSubscriptionDto {
 }
 class RemoveSubscriptionDto { @IsString() endpoint!: string; }
 
+class OneSignalSubscriptionDto {
+  @IsString() @MaxLength(128) subscriptionId!: string;
+  @IsOptional() @IsString() @MaxLength(128) deviceId?: string;
+}
+
 @Controller('notifications')
 @UseGuards(JwtGuard, RolesGuard)
 @Roles(Role.SUPER_ADMIN, Role.RESTAURANT_ADMIN)
@@ -28,5 +33,7 @@ export class NotificationsController {
   @Patch('preferences') update(@Req() req:{user:{sub:string}},@Body() body:PreferencesDto){return this.notifications.updatePreferences(req.user.sub,body)}
   @Post('subscriptions') subscribe(@Req() req:{user:{sub:string};headers:{'user-agent'?:string}},@Body() body:PushSubscriptionDto){return this.notifications.saveSubscription(req.user.sub,body,req.headers['user-agent'])}
   @Delete('subscriptions') unsubscribe(@Req() req:{user:{sub:string}},@Body() body:RemoveSubscriptionDto){return this.notifications.removeSubscription(req.user.sub,body.endpoint)}
+  @Post('onesignal/subscriptions') oneSignalSubscribe(@Req() req:{user:{sub:string};headers:{'user-agent'?:string}},@Body() body:OneSignalSubscriptionDto){return this.notifications.saveOneSignalSubscription(req.user.sub,body.subscriptionId,body.deviceId,req.headers['user-agent'])}
+  @Delete('onesignal/subscriptions') oneSignalUnsubscribe(@Req() req:{user:{sub:string}},@Body() body:OneSignalSubscriptionDto){return this.notifications.removeOneSignalSubscription(req.user.sub,body.subscriptionId)}
   @Post('test') test(@Req() req:{user:{sub:string}}){return this.notifications.sendTest(req.user.sub)}
 }

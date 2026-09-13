@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { NotificationPreference, Restaurant, User } from '../common/schemas';
+import { NotificationPreference, OneSignalSubscriptionRecord, Restaurant, User } from '../common/schemas';
 import { Role } from '../common/roles';
 
 export type NotificationPreferencesInput = {
@@ -41,6 +41,8 @@ export class NotificationsService implements OnModuleInit {
   constructor(
     @InjectModel(NotificationPreference.name)
     private readonly preferences: Model<NotificationPreference>,
+    @InjectModel(OneSignalSubscriptionRecord.name)
+    private readonly oneSignalSubscriptions: Model<OneSignalSubscriptionRecord>,
     @InjectModel(User.name)
     private readonly users: Model<User>,
     @InjectModel(Restaurant.name)
@@ -60,12 +62,13 @@ export class NotificationsService implements OnModuleInit {
       { upsert: true, new: true, setDefaultsOnInsert: true },
     ).lean();
     if (!row) throw new Error('Não foi possível carregar as preferências de notificação.');
+    const deviceCount = await this.oneSignalSubscriptions.countDocuments({ userId: uid, active: true });
     return {
       enabled: row.enabled,
       newOrder: row.newOrder,
       orderCancelled: row.orderCancelled,
       orderStatus: row.orderStatus,
-      deviceCount: 0,
+      deviceCount,
       publicKey: null,
       pushAvailable: this.oneSignalReady(),
       provider: 'onesignal' as const,
@@ -84,6 +87,60 @@ export class NotificationsService implements OnModuleInit {
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
     return this.getPreferences(userId);
+  }
+
+  async saveOneSignalSubscription(userId: string, subscriptionId: string, deviceId?: string, userAgent?: string) {
+    const uid = this.objectId(userId);
+    const cleanSubscriptionId = String(subscriptionId || '').trim();
+    if (!cleanSubscriptionId) throw new Error('Subscription ID do OneSignal é obrigatório.');
+    const cleanDeviceId = deviceId?.trim() || undefined;
+
+    // Um mesmo navegador pode trocar de usuário operacional. O Subscription ID
+    // deve pertencer somente à conta que está ativa naquele momento.
+    await this.oneSignalSubscriptions.updateOne(
+      { subscriptionId: cleanSubscriptionId },
+      {
+        $set: {
+          userId: uid,
+          active: true,
+          lastSeenAt: new Date(),
+          ...(cleanDeviceId ? { deviceId: cleanDeviceId } : {}),
+          ...(userAgent ? { userAgent } : {}),
+        },
+      },
+      { upsert: true },
+    );
+
+    // Se o mesmo deviceId reaparecer com outro Subscription ID, desativa o antigo.
+    if (cleanDeviceId) {
+      await this.oneSignalSubscriptions.updateMany(
+        { userId: uid, deviceId: cleanDeviceId, subscriptionId: { $ne: cleanSubscriptionId } },
+        { $set: { active: false } },
+      );
+    }
+
+    return {
+      ok: true,
+      provider: 'onesignal' as const,
+      subscriptionId: cleanSubscriptionId,
+      deviceCount: await this.oneSignalSubscriptions.countDocuments({ userId: uid, active: true }),
+    };
+  }
+
+  async removeOneSignalSubscription(userId: string, subscriptionId: string) {
+    const uid = this.objectId(userId);
+    const cleanSubscriptionId = String(subscriptionId || '').trim();
+    if (cleanSubscriptionId) {
+      await this.oneSignalSubscriptions.updateOne(
+        { userId: uid, subscriptionId: cleanSubscriptionId },
+        { $set: { active: false, lastSeenAt: new Date() } },
+      );
+    }
+    return {
+      ok: true,
+      provider: 'onesignal' as const,
+      deviceCount: await this.oneSignalSubscriptions.countDocuments({ userId: uid, active: true }),
+    };
   }
 
   /**
@@ -221,27 +278,52 @@ export class NotificationsService implements OnModuleInit {
     if (!this.oneSignalReady() || users.length === 0) return 0;
 
     const userIds = users.map((user) => user._id as Types.ObjectId);
-    const preferenceRows = await this.preferences.find({ userId: { $in: userIds } }).lean();
+    const [preferenceRows, subscriptionRows] = await Promise.all([
+      this.preferences.find({ userId: { $in: userIds } }).lean(),
+      this.oneSignalSubscriptions.find({ userId: { $in: userIds }, active: true }).lean(),
+    ]);
     const preferenceByUser = new Map(preferenceRows.map((row) => [row.userId.toString(), row]));
+    const subscriptionsByUser = new Map<string, string[]>();
+    for (const row of subscriptionRows) {
+      const key = row.userId.toString();
+      const list = subscriptionsByUser.get(key) || [];
+      if (row.subscriptionId && !list.includes(row.subscriptionId)) list.push(row.subscriptionId);
+      subscriptionsByUser.set(key, list);
+    }
 
-    const groups = new Map<string, { payload: PushPayload; externalIds: string[] }>();
+    const groups = new Map<string, { payload: PushPayload; subscriptionIds: string[]; externalIds: string[] }>();
     for (const user of users) {
-      const preference = preferenceByUser.get(user._id.toString());
+      const userId = user._id.toString();
+      const preference = preferenceByUser.get(userId);
       const enabled = preference?.enabled ?? true;
       const kindEnabled = preference?.[kind] ?? (kind === 'orderStatus' ? false : true);
       if ((!ignoreMasterPreference && !enabled) || (!ignoreTypePreference && !kindEnabled)) continue;
 
       const payload = payloadFor(user);
       const key = JSON.stringify([payload.title, payload.body, payload.url, payload.tag, payload.kind]);
-      const current = groups.get(key) || { payload, externalIds: [] };
-      current.externalIds.push(this.externalId(user._id.toString()));
+      const current = groups.get(key) || { payload, subscriptionIds: [], externalIds: [] };
+      const directSubscriptions = subscriptionsByUser.get(userId) || [];
+      if (directSubscriptions.length) {
+        for (const subscriptionId of directSubscriptions) {
+          if (!current.subscriptionIds.includes(subscriptionId)) current.subscriptionIds.push(subscriptionId);
+        }
+      } else {
+        // Compatibilidade para usuários que ainda não abriram a v41 para registrar
+        // o Subscription ID diretamente no backend.
+        current.externalIds.push(this.externalId(userId));
+      }
       groups.set(key, current);
     }
 
     let sent = 0;
     for (const group of groups.values()) {
       try {
-        sent += await this.sendOneSignal(group.externalIds, group.payload);
+        if (group.subscriptionIds.length) {
+          sent += await this.sendOneSignalToSubscriptions(group.subscriptionIds, group.payload);
+        }
+        if (group.externalIds.length) {
+          sent += await this.sendOneSignalToAliases(group.externalIds, group.payload);
+        }
       } catch (error) {
         this.logger.warn(`Falha ao enviar notificação via OneSignal: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -249,12 +331,32 @@ export class NotificationsService implements OnModuleInit {
     return sent;
   }
 
-  private async sendOneSignal(externalIds: string[], payload: PushPayload) {
-    if (!externalIds.length) return 0;
+  private oneSignalMessage(payload: PushPayload) {
     const icon = this.absoluteUrl(payload.icon || '/assets/branding/menu-flow-notification-icon.png');
     const badge = this.absoluteUrl(payload.badge || '/assets/branding/menu-flow-notification-icon.png');
     const url = this.absoluteUrl(payload.url);
+    return {
+      app_id: this.oneSignalAppId,
+      headings: { en: payload.title, pt: payload.title },
+      contents: { en: payload.body, pt: payload.body },
+      web_url: url,
+      chrome_web_icon: icon,
+      chrome_web_badge: badge,
+      // Mantém a mensagem disponível quando o aparelho estiver temporariamente
+      // offline ou o PWA tiver sido removido da lista de apps recentes.
+      ttl: 86400,
+      name: `menu-flow-${payload.tag}`.slice(0, 128),
+      data: {
+        source: 'MENU_FLOW',
+        type: payload.kind || 'notification',
+        route: payload.url,
+        tag: payload.tag,
+      },
+    };
+  }
 
+  private async sendOneSignalToSubscriptions(subscriptionIds: string[], payload: PushPayload) {
+    if (!subscriptionIds.length) return 0;
     const response = await fetch('https://api.onesignal.com/notifications?c=push', {
       method: 'POST',
       headers: {
@@ -263,21 +365,8 @@ export class NotificationsService implements OnModuleInit {
         Accept: 'application/json',
       },
       body: JSON.stringify({
-        app_id: this.oneSignalAppId,
-        target_channel: 'push',
-        include_aliases: { external_id: externalIds },
-        headings: { en: payload.title, pt: payload.title },
-        contents: { en: payload.body, pt: payload.body },
-        web_url: url,
-        chrome_web_icon: icon,
-        chrome_web_badge: badge,
-        name: `menu-flow-${payload.tag}`.slice(0, 128),
-        custom_data: {
-          source: 'MENU_FLOW',
-          type: payload.kind || 'notification',
-          route: payload.url,
-          tag: payload.tag,
-        },
+        ...this.oneSignalMessage(payload),
+        include_subscription_ids: subscriptionIds,
       }),
     });
 
@@ -285,9 +374,39 @@ export class NotificationsService implements OnModuleInit {
     if (!response.ok) {
       throw new Error(`OneSignal respondeu ${response.status}: ${JSON.stringify(data.errors || data)}`);
     }
+    if (!data.id) {
+      this.logger.warn(`OneSignal aceitou a requisição, mas não criou mensagem para os Subscription IDs informados.`);
+      return 0;
+    }
+    this.logger.log(`Push OneSignal criado para ${subscriptionIds.length} Subscription ID(s). Mensagem=${data.id}.`);
+    return typeof data.recipients === 'number' ? data.recipients : subscriptionIds.length;
+  }
 
-    // A API pode não retornar recipients em alguns modos de targeting por alias.
-    // Nesse caso, a requisição aceita pelo OneSignal conta como envio para os IDs alvo.
+  private async sendOneSignalToAliases(externalIds: string[], payload: PushPayload) {
+    if (!externalIds.length) return 0;
+    const response = await fetch('https://api.onesignal.com/notifications?c=push', {
+      method: 'POST',
+      headers: {
+        Authorization: `Key ${this.oneSignalApiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        ...this.oneSignalMessage(payload),
+        target_channel: 'push',
+        include_aliases: { external_id: externalIds },
+      }),
+    });
+
+    const data = await response.json().catch(() => ({})) as OneSignalResponse;
+    if (!response.ok) {
+      throw new Error(`OneSignal respondeu ${response.status}: ${JSON.stringify(data.errors || data)}`);
+    }
+    if (!data.id) {
+      this.logger.warn(`OneSignal aceitou a requisição por alias, mas não criou mensagem. Nenhuma inscrição válida foi encontrada.`);
+      return 0;
+    }
+    this.logger.log(`Push OneSignal criado por alias para ${externalIds.length} usuário(s). Mensagem=${data.id}.`);
     return typeof data.recipients === 'number' ? data.recipients : externalIds.length;
   }
 

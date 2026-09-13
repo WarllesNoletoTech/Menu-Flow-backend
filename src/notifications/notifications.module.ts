@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import {
   NotificationPreference, NotificationPreferenceSchema,
+  OneSignalSubscriptionRecord, OneSignalSubscriptionRecordSchema,
   Restaurant, RestaurantSchema,
   User, UserSchema,
 } from '../common/schemas';
@@ -12,6 +13,7 @@ import { NotificationsService } from './notifications.service';
 @Module({
   imports:[MongooseModule.forFeature([
     {name:NotificationPreference.name,schema:NotificationPreferenceSchema},
+    {name:OneSignalSubscriptionRecord.name,schema:OneSignalSubscriptionRecordSchema},
     {name:Restaurant.name,schema:RestaurantSchema},
     {name:User.name,schema:UserSchema},
   ])],

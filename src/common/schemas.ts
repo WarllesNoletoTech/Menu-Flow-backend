@@ -129,6 +129,24 @@ export class NotificationPreference {
 export const NotificationPreferenceSchema = SchemaFactory.createForClass(NotificationPreference);
 
 @Schema({ timestamps: true })
+export class OneSignalSubscriptionRecord {
+  @Prop({ type: Types.ObjectId, ref: "User", required: true, index: true })
+  userId!: Types.ObjectId;
+  @Prop({ required: true, unique: true, trim: true, maxlength: 128 })
+  subscriptionId!: string;
+  @Prop({ trim: true, maxlength: 128 }) deviceId?: string;
+  @Prop() userAgent?: string;
+  @Prop({ default: true, index: true }) active!: boolean;
+  @Prop() lastSeenAt?: Date;
+}
+export const OneSignalSubscriptionRecordSchema = SchemaFactory.createForClass(OneSignalSubscriptionRecord);
+OneSignalSubscriptionRecordSchema.index({ userId: 1, active: 1, updatedAt: -1 });
+OneSignalSubscriptionRecordSchema.index(
+  { userId: 1, deviceId: 1 },
+  { unique: true, partialFilterExpression: { deviceId: { $type: "string" } } },
+);
+
+@Schema({ timestamps: true })
 export class PushSubscriptionRecord {
   @Prop({ type: Types.ObjectId, ref: "User", required: true, index: true })
   userId!: Types.ObjectId;

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, MaxLength, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { IsBoolean, IsNumber, IsObject, IsOptional, IsString } from 'class-validator';
 import { JwtGuard } from '../auth/jwt.guard';
 import { Role } from '../common/roles';
@@ -15,6 +15,7 @@ class PushSubscriptionDto {
   @IsString() endpoint!: string;
   @IsOptional() @IsNumber() expirationTime?: number | null;
   @IsObject() keys!: { p256dh: string; auth: string };
+  @IsOptional() @IsString() @MaxLength(128) deviceId?: string;
 }
 class RemoveSubscriptionDto { @IsString() endpoint!: string; }
 

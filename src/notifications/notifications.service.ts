@@ -75,7 +75,7 @@ export class NotificationsService implements OnModuleInit {
       newOrder: row.newOrder,
       orderCancelled: row.orderCancelled,
       orderStatus: row.orderStatus,
-      deviceCount: await this.subscriptions.countDocuments({ userId: uid }),
+      deviceCount: await this.countDevices(uid),
       publicKey: this.vapid?.publicKey ?? null,
       pushAvailable: Boolean(this.vapid),
     };
@@ -101,33 +101,118 @@ export class NotificationsService implements OnModuleInit {
       endpoint: string;
       expirationTime?: number | null;
       keys: { p256dh: string; auth: string };
+      deviceId?: string;
     },
     userAgent?: string,
   ) {
     const uid = this.objectId(userId);
     if (!subscription.endpoint?.startsWith('https://') || !subscription.keys?.p256dh || !subscription.keys?.auth)
       throw new Error('Assinatura de notificação inválida.');
-    await this.subscriptions.findOneAndUpdate(
-      { endpoint: subscription.endpoint },
-      {
-        $set: {
+
+    const deviceId = subscription.deviceId?.trim().slice(0, 128) || undefined;
+    if (deviceId) {
+      const previousDevice = await this.subscriptions.findOne({ userId: uid, deviceId }).lean();
+      if (previousDevice && previousDevice.endpoint !== subscription.endpoint) {
+        await this.subscriptions.deleteOne({ _id: previousDevice._id });
+      } else if (!previousDevice && userAgent) {
+        // Migração da v36: o mesmo aparelho podia gerar um endpoint novo após
+        // reabrir o PWA e deixar a assinatura antiga parecendo "outro dispositivo".
+        // Remove apenas a assinatura legada mais recente com o mesmo navegador.
+        const legacy = await this.subscriptions.findOne({
           userId: uid,
-          endpoint: subscription.endpoint,
-          expirationTime: subscription.expirationTime ?? null,
-          p256dh: subscription.keys.p256dh,
-          auth: subscription.keys.auth,
-          userAgent: userAgent?.slice(0, 500),
-        },
+          endpoint: { $ne: subscription.endpoint },
+          userAgent: userAgent.slice(0, 500),
+          $or: [{ deviceId: { $exists: false } }, { deviceId: '' }, { deviceId: null }],
+        }).sort({ updatedAt: -1 }).lean();
+        if (legacy) await this.subscriptions.deleteOne({ _id: legacy._id });
+      }
+    }
+
+    const update = {
+      $set: {
+        userId: uid,
+        endpoint: subscription.endpoint,
+        expirationTime: subscription.expirationTime ?? null,
+        p256dh: subscription.keys.p256dh,
+        auth: subscription.keys.auth,
+        userAgent: userAgent?.slice(0, 500),
+        lastSeenAt: new Date(),
+        ...(deviceId ? { deviceId } : {}),
       },
+      ...(!deviceId ? { $unset: { deviceId: 1 } } : {}),
+    };
+
+    const saved = await this.subscriptions.findOneAndUpdate(
+      { endpoint: subscription.endpoint },
+      update,
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
-    return { ok: true, deviceCount: await this.subscriptions.countDocuments({ userId: uid }) };
+
+    if (deviceId && saved) {
+      await this.subscriptions.deleteMany({ userId: uid, deviceId, _id: { $ne: saved._id } });
+    }
+    return { ok: true, deviceCount: await this.countDevices(uid) };
   }
 
   async removeSubscription(userId: string, endpoint: string) {
     const uid = this.objectId(userId);
     if (endpoint) await this.subscriptions.deleteOne({ userId: uid, endpoint });
-    return { ok: true, deviceCount: await this.subscriptions.countDocuments({ userId: uid }) };
+    return { ok: true, deviceCount: await this.countDevices(uid) };
+  }
+
+  async renewSubscription(
+    oldEndpoint: string,
+    oldAuth: string,
+    subscription: {
+      endpoint: string;
+      expirationTime?: number | null;
+      keys: { p256dh: string; auth: string };
+    },
+  ) {
+    if (
+      !oldEndpoint?.startsWith('https://') ||
+      !oldAuth ||
+      !subscription?.endpoint?.startsWith('https://') ||
+      !subscription.keys?.p256dh ||
+      !subscription.keys?.auth
+    ) return { ok: false };
+
+    const previous = await this.subscriptions.findOne({ endpoint: oldEndpoint, auth: oldAuth });
+    if (!previous) return { ok: false };
+
+    const existing = await this.subscriptions.findOne({ endpoint: subscription.endpoint });
+    if (existing && existing._id.toString() !== previous._id.toString()) {
+      if (existing.userId.toString() !== previous.userId.toString()) return { ok: false };
+      await this.subscriptions.updateOne(
+        { _id: existing._id },
+        {
+          $set: {
+            p256dh: subscription.keys.p256dh,
+            auth: subscription.keys.auth,
+            expirationTime: subscription.expirationTime ?? null,
+            deviceId: previous.deviceId,
+            userAgent: previous.userAgent,
+            lastSeenAt: new Date(),
+          },
+        },
+      );
+      await this.subscriptions.deleteOne({ _id: previous._id });
+      return { ok: true };
+    }
+
+    await this.subscriptions.updateOne(
+      { _id: previous._id },
+      {
+        $set: {
+          endpoint: subscription.endpoint,
+          p256dh: subscription.keys.p256dh,
+          auth: subscription.keys.auth,
+          expirationTime: subscription.expirationTime ?? null,
+          lastSeenAt: new Date(),
+        },
+      },
+    );
+    return { ok: true };
   }
 
   async sendTest(userId: string) {
@@ -264,6 +349,15 @@ export class NotificationsService implements OnModuleInit {
       }
     }));
     return sent;
+  }
+
+  private async countDevices(userId: Types.ObjectId) {
+    const deviceIds = await this.subscriptions.distinct('deviceId', {
+      userId,
+      deviceId: { $exists: true, $ne: '' },
+    });
+    if (deviceIds.length > 0) return deviceIds.length;
+    return this.subscriptions.countDocuments({ userId });
   }
 
   private async configureVapid() {

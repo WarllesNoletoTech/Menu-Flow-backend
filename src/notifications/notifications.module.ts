@@ -8,6 +8,7 @@ import {
   User, UserSchema,
 } from '../common/schemas';
 import { NotificationsController } from './notifications.controller';
+import { NotificationsPushController } from './notifications-push.controller';
 import { NotificationsService } from './notifications.service';
 @Module({
   imports:[MongooseModule.forFeature([
@@ -17,6 +18,6 @@ import { NotificationsService } from './notifications.service';
     {name:Restaurant.name,schema:RestaurantSchema},
     {name:User.name,schema:UserSchema},
   ])],
-  controllers:[NotificationsController],providers:[NotificationsService],exports:[NotificationsService]
+  controllers:[NotificationsController,NotificationsPushController],providers:[NotificationsService],exports:[NotificationsService]
 })
 export class NotificationsModule {}

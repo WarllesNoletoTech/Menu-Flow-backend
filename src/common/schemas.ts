@@ -133,13 +133,19 @@ export class PushSubscriptionRecord {
   @Prop({ type: Types.ObjectId, ref: "User", required: true, index: true })
   userId!: Types.ObjectId;
   @Prop({ required: true, unique: true, trim: true }) endpoint!: string;
+  @Prop({ trim: true, maxlength: 128 }) deviceId?: string;
   @Prop({ required: true }) p256dh!: string;
   @Prop({ required: true }) auth!: string;
   @Prop({ type: Number, default: null }) expirationTime?: number | null;
   @Prop() userAgent?: string;
+  @Prop() lastSeenAt?: Date;
 }
 export const PushSubscriptionRecordSchema = SchemaFactory.createForClass(PushSubscriptionRecord);
 PushSubscriptionRecordSchema.index({ userId: 1, updatedAt: -1 });
+PushSubscriptionRecordSchema.index(
+  { userId: 1, deviceId: 1 },
+  { unique: true, partialFilterExpression: { deviceId: { $type: "string" } } },
+);
 
 @Schema({ timestamps: true })
 export class PushVapidConfig {

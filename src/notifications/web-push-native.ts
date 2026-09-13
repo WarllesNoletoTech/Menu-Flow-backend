@@ -156,7 +156,7 @@ export async function sendWebPush(
       Authorization: `vapid t=${jwt}, k=${vapid.publicKey}`,
       'Content-Encoding': 'aes128gcm',
       'Content-Type': 'application/octet-stream',
-      TTL: '120',
+      TTL: '86400',
       Urgency: 'high',
     },
     body: body as unknown as BodyInit,

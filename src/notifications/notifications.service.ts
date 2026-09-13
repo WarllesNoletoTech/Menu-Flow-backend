@@ -1,22 +1,9 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import {
-  NotificationPreference,
-  PushSubscriptionRecord,
-  PushVapidConfig,
-  Restaurant,
-  User,
-} from '../common/schemas';
+import { NotificationPreference, Restaurant, User } from '../common/schemas';
 import { Role } from '../common/roles';
-import {
-  generateVapidKeys,
-  sendWebPush,
-  WebPushHttpError,
-  type VapidDetails,
-} from './web-push-native';
 
 export type NotificationPreferencesInput = {
   enabled?: boolean;
@@ -33,20 +20,27 @@ type PushPayload = {
   url: string;
   icon?: string;
   badge?: string;
+  kind?: NotificationKind | 'test';
 };
+
+type OneSignalResponse = {
+  id?: string;
+  recipients?: number;
+  errors?: unknown;
+};
+
+const DEFAULT_ONESIGNAL_APP_ID = '2a519701-a888-4d97-90e3-e345d2dd3bea';
 
 @Injectable()
 export class NotificationsService implements OnModuleInit {
   private readonly logger = new Logger(NotificationsService.name);
-  private vapid: VapidDetails | null = null;
+  private oneSignalAppId = '';
+  private oneSignalApiKey = '';
+  private frontendOrigin = 'https://menuflowexpress.vercel.app';
 
   constructor(
     @InjectModel(NotificationPreference.name)
     private readonly preferences: Model<NotificationPreference>,
-    @InjectModel(PushSubscriptionRecord.name)
-    private readonly subscriptions: Model<PushSubscriptionRecord>,
-    @InjectModel(PushVapidConfig.name)
-    private readonly vapidConfigs: Model<PushVapidConfig>,
     @InjectModel(User.name)
     private readonly users: Model<User>,
     @InjectModel(Restaurant.name)
@@ -54,13 +48,8 @@ export class NotificationsService implements OnModuleInit {
     private readonly config: ConfigService,
   ) {}
 
-  async onModuleInit() {
-    try {
-      await this.configureVapid();
-      this.logger.log('Notificações Web Push inicializadas.');
-    } catch (error) {
-      this.logger.error(`Falha ao inicializar Web Push: ${error instanceof Error ? error.message : String(error)}`);
-    }
+  onModuleInit() {
+    this.configureOneSignal();
   }
 
   async getPreferences(userId: string) {
@@ -76,9 +65,10 @@ export class NotificationsService implements OnModuleInit {
       newOrder: row.newOrder,
       orderCancelled: row.orderCancelled,
       orderStatus: row.orderStatus,
-      deviceCount: await this.countDevices(uid),
-      publicKey: this.vapid?.publicKey ?? null,
-      pushAvailable: Boolean(this.vapid),
+      deviceCount: 0,
+      publicKey: null,
+      pushAvailable: this.oneSignalReady(),
+      provider: 'onesignal' as const,
     };
   }
 
@@ -96,161 +86,24 @@ export class NotificationsService implements OnModuleInit {
     return this.getPreferences(userId);
   }
 
-  async saveSubscription(
-    userId: string,
-    subscription: {
-      endpoint: string;
-      expirationTime?: number | null;
-      keys: { p256dh: string; auth: string };
-      deviceId?: string;
-    },
-    userAgent?: string,
-  ) {
-    const uid = this.objectId(userId);
-    if (!subscription.endpoint?.startsWith('https://') || !subscription.keys?.p256dh || !subscription.keys?.auth)
-      throw new Error('Assinatura de notificação inválida.');
-
-    const deviceId = subscription.deviceId?.trim().slice(0, 128) || undefined;
-    if (deviceId) {
-      const previousDevice = await this.subscriptions.findOne({ userId: uid, deviceId }).lean();
-      if (previousDevice && previousDevice.endpoint !== subscription.endpoint) {
-        await this.subscriptions.deleteOne({ _id: previousDevice._id });
-      } else if (!previousDevice && userAgent) {
-        // Migração da v36: o mesmo aparelho podia gerar um endpoint novo após
-        // reabrir o PWA e deixar a assinatura antiga parecendo "outro dispositivo".
-        // Remove apenas a assinatura legada mais recente com o mesmo navegador.
-        const legacy = await this.subscriptions.findOne({
-          userId: uid,
-          endpoint: { $ne: subscription.endpoint },
-          userAgent: userAgent.slice(0, 500),
-          $or: [{ deviceId: { $exists: false } }, { deviceId: '' }, { deviceId: null }],
-        }).sort({ updatedAt: -1 }).lean();
-        if (legacy) await this.subscriptions.deleteOne({ _id: legacy._id });
-      }
-    }
-
-    const update = {
-      $set: {
-        userId: uid,
-        endpoint: subscription.endpoint,
-        expirationTime: subscription.expirationTime ?? null,
-        p256dh: subscription.keys.p256dh,
-        auth: subscription.keys.auth,
-        userAgent: userAgent?.slice(0, 500),
-        lastSeenAt: new Date(),
-        ...(deviceId ? { deviceId } : {}),
-      },
-      ...(!deviceId ? { $unset: { deviceId: 1 } } : {}),
-    };
-
-    const saved = await this.subscriptions.findOneAndUpdate(
-      { endpoint: subscription.endpoint },
-      update,
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    );
-
-    if (deviceId && saved) {
-      await this.subscriptions.deleteMany({ userId: uid, deviceId, _id: { $ne: saved._id } });
-    }
-
-    let deliveryToken = saved?.deliveryToken?.trim();
-    if (!deliveryToken && saved) {
-      deliveryToken = randomBytes(32).toString('base64url');
-      await this.subscriptions.updateOne(
-        { _id: saved._id },
-        { $set: { deliveryToken } },
-      );
-    }
-
-    return {
-      ok: true,
-      deviceCount: await this.countDevices(uid),
-      deliveryToken: deliveryToken || null,
-    };
+  /**
+   * Endpoints mantidos por compatibilidade temporária com instalações antigas.
+   * O envio atual usa OneSignal e não precisa armazenar Web Push/VAPID no Menu Flow.
+   */
+  async saveSubscription(_userId: string, _subscription: unknown, _userAgent?: string) {
+    return { ok: true, deviceCount: 0, provider: 'onesignal' };
   }
 
-  async removeSubscription(userId: string, endpoint: string) {
-    const uid = this.objectId(userId);
-    if (endpoint) await this.subscriptions.deleteOne({ userId: uid, endpoint });
-    return { ok: true, deviceCount: await this.countDevices(uid) };
+  async removeSubscription(_userId: string, _endpoint: string) {
+    return { ok: true, deviceCount: 0, provider: 'onesignal' };
   }
 
-  async renewSubscription(
-    oldEndpoint: string,
-    oldAuth: string,
-    subscription: {
-      endpoint: string;
-      expirationTime?: number | null;
-      keys: { p256dh: string; auth: string };
-    },
-  ) {
-    if (
-      !oldEndpoint?.startsWith('https://') ||
-      !oldAuth ||
-      !subscription?.endpoint?.startsWith('https://') ||
-      !subscription.keys?.p256dh ||
-      !subscription.keys?.auth
-    ) return { ok: false };
-
-    const previous = await this.subscriptions.findOne({ endpoint: oldEndpoint, auth: oldAuth });
-    if (!previous) return { ok: false };
-
-    const existing = await this.subscriptions.findOne({ endpoint: subscription.endpoint });
-    if (existing && existing._id.toString() !== previous._id.toString()) {
-      if (existing.userId.toString() !== previous.userId.toString()) return { ok: false };
-      const deliveryToken = previous.deliveryToken || existing.deliveryToken || randomBytes(32).toString('base64url');
-      await this.subscriptions.updateOne(
-        { _id: existing._id },
-        {
-          $set: {
-            p256dh: subscription.keys.p256dh,
-            auth: subscription.keys.auth,
-            expirationTime: subscription.expirationTime ?? null,
-            deviceId: previous.deviceId,
-            userAgent: previous.userAgent,
-            deliveryToken,
-            lastSeenAt: new Date(),
-          },
-        },
-      );
-      await this.subscriptions.deleteOne({ _id: previous._id });
-      return { ok: true, deliveryToken };
-    }
-
-    const deliveryToken = previous.deliveryToken || randomBytes(32).toString('base64url');
-    await this.subscriptions.updateOne(
-      { _id: previous._id },
-      {
-        $set: {
-          endpoint: subscription.endpoint,
-          p256dh: subscription.keys.p256dh,
-          auth: subscription.keys.auth,
-          expirationTime: subscription.expirationTime ?? null,
-          deliveryToken,
-          lastSeenAt: new Date(),
-        },
-      },
-    );
-    return { ok: true, deliveryToken };
+  async renewSubscription(_oldEndpoint: string, _oldAuth: string, _subscription: unknown) {
+    return { ok: false, provider: 'onesignal' };
   }
 
-  async pullPendingNotifications(deliveryToken: string) {
-    const token = deliveryToken?.trim();
-    if (!token || token.length < 20 || token.length > 200) {
-      return { ok: false, notifications: [] as PushPayload[] };
-    }
-
-    const row = await this.subscriptions.findOneAndUpdate(
-      { deliveryToken: token },
-      { $set: { pendingNotifications: [], lastSeenAt: new Date() } },
-      { new: false },
-    ).lean();
-
-    if (!row) return { ok: false, notifications: [] as PushPayload[] };
-    const notifications = Array.isArray(row.pendingNotifications)
-      ? (row.pendingNotifications as unknown as PushPayload[]).filter((item) => Boolean(item && typeof item === 'object'))
-      : [];
-    return { ok: true, notifications: notifications.slice(-8) };
+  async pullPendingNotifications(_deliveryToken: string) {
+    return { ok: false, notifications: [] as PushPayload[], provider: 'onesignal' };
   }
 
   async sendTest(userId: string) {
@@ -260,10 +113,13 @@ export class NotificationsService implements OnModuleInit {
       [user],
       'newOrder',
       (target) => ({
-        title: 'Menu Flow — notificações ativadas',
-        body: 'Este dispositivo está pronto para avisar quando chegar um novo pedido.',
+        title: '🔔 Teste de notificação — Menu Flow',
+        body: target.role === Role.SUPER_ADMIN
+          ? 'Tudo certo! As notificações administrativas estão funcionando neste dispositivo.'
+          : 'Tudo certo! Você receberá avisos dos pedidos da sua loja neste dispositivo.',
         tag: `mf-test-${target._id.toString()}`,
         url: target.role === Role.SUPER_ADMIN ? '/admin/notificacoes' : '/empresa/notificacoes',
+        kind: 'test',
       }),
       true,
       true,
@@ -279,14 +135,20 @@ export class NotificationsService implements OnModuleInit {
     fulfillment: string;
   }) {
     const users = await this.notificationRecipients(input.restaurantId);
-    const number = input.orderNumber || 'Novo pedido';
+    const number = this.orderNumber(input.orderNumber);
     const total = (input.totalCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    const service = input.fulfillment === 'DELIVERY' ? 'Entrega' : 'Retirada';
+    const service = input.fulfillment === 'DELIVERY' ? 'Entrega' : 'Retirada no local';
+
     await this.sendToUsers(users, 'newOrder', (user) => ({
-      title: user.role === Role.SUPER_ADMIN ? `Novo pedido • ${input.restaurantName}` : 'Novo pedido recebido',
-      body: `${number} • ${total} • ${service}`,
+      title: user.role === Role.SUPER_ADMIN
+        ? `🛎️ Novo pedido • ${input.restaurantName}`
+        : '🛎️ Novo pedido recebido!',
+      body: user.role === Role.SUPER_ADMIN
+        ? `${number} • ${total} • ${service}. Toque para acompanhar.`
+        : `${number} • ${total} • ${service}. Toque para abrir e aceitar o pedido.`,
       tag: `new-order-${input.orderNumber || Date.now()}`,
       url: user.role === Role.SUPER_ADMIN ? '/admin/pedidos?status=pending' : '/empresa/pedidos?status=pending',
+      kind: 'newOrder',
     }));
   }
 
@@ -300,12 +162,19 @@ export class NotificationsService implements OnModuleInit {
       this.restaurants.findById(this.objectId(input.restaurantId)).lean(),
     ]);
     const store = restaurant?.tradeName || restaurant?.name || 'Estabelecimento';
-    const number = input.orderNumber || 'Pedido';
+    const number = this.orderNumber(input.orderNumber);
+    const reason = input.reason?.trim();
+
     await this.sendToUsers(users, 'orderCancelled', (user) => ({
-      title: user.role === Role.SUPER_ADMIN ? `Pedido cancelado • ${store}` : 'Pedido cancelado',
-      body: input.reason ? `${number} • ${input.reason}` : `${number} foi cancelado ou recusado.`,
-      tag: `cancelled-${number}`,
+      title: user.role === Role.SUPER_ADMIN
+        ? `❌ Pedido cancelado • ${store}`
+        : '❌ Pedido cancelado ou recusado',
+      body: reason
+        ? `${number} foi cancelado. Motivo: ${reason}`
+        : `${number} foi cancelado ou recusado. Toque para ver os detalhes.`,
+      tag: `cancelled-${input.orderNumber || 'pedido'}`,
       url: user.role === Role.SUPER_ADMIN ? '/admin/pedidos?status=cancelled' : '/empresa/pedidos?status=cancelled',
+      kind: 'orderCancelled',
     }));
   }
 
@@ -319,12 +188,15 @@ export class NotificationsService implements OnModuleInit {
       this.restaurants.findById(this.objectId(input.restaurantId)).lean(),
     ]);
     const store = restaurant?.tradeName || restaurant?.name || 'Estabelecimento';
-    const number = input.orderNumber || 'Pedido';
+    const number = this.orderNumber(input.orderNumber);
+    const status = this.statusNotification(input.status, number);
+
     await this.sendToUsers(users, 'orderStatus', (user) => ({
-      title: user.role === Role.SUPER_ADMIN ? `Pedido atualizado • ${store}` : 'Pedido atualizado',
-      body: `${number} agora está ${this.statusLabel(input.status)}.`,
-      tag: `status-${number}-${input.status}`,
+      title: user.role === Role.SUPER_ADMIN ? `${status.title} • ${store}` : status.title,
+      body: status.body,
+      tag: `status-${input.orderNumber || 'pedido'}-${input.status}`,
       url: user.role === Role.SUPER_ADMIN ? '/admin/pedidos' : '/empresa/pedidos',
+      kind: 'orderStatus',
     }));
   }
 
@@ -346,118 +218,161 @@ export class NotificationsService implements OnModuleInit {
     ignoreTypePreference = false,
     ignoreMasterPreference = false,
   ) {
-    if (!this.vapid || users.length === 0) return 0;
+    if (!this.oneSignalReady() || users.length === 0) return 0;
+
     const userIds = users.map((user) => user._id as Types.ObjectId);
-    const [preferenceRows, subscriptions] = await Promise.all([
-      this.preferences.find({ userId: { $in: userIds } }).lean(),
-      this.subscriptions.find({ userId: { $in: userIds } }).lean(),
-    ]);
+    const preferenceRows = await this.preferences.find({ userId: { $in: userIds } }).lean();
     const preferenceByUser = new Map(preferenceRows.map((row) => [row.userId.toString(), row]));
-    const userById = new Map(users.map((user) => [user._id.toString(), user]));
-    let sent = 0;
-    await Promise.allSettled(subscriptions.map(async (subscription) => {
-      const user = userById.get(subscription.userId.toString());
-      if (!user) return;
-      const preference = preferenceByUser.get(subscription.userId.toString());
+
+    const groups = new Map<string, { payload: PushPayload; externalIds: string[] }>();
+    for (const user of users) {
+      const preference = preferenceByUser.get(user._id.toString());
       const enabled = preference?.enabled ?? true;
       const kindEnabled = preference?.[kind] ?? (kind === 'orderStatus' ? false : true);
-      if ((!ignoreMasterPreference && !enabled) || (!ignoreTypePreference && !kindEnabled)) return;
-      const basePayload = payloadFor(user);
-      const payload = {
-        ...basePayload,
-        icon: basePayload.icon || '/assets/branding/menu-flow-icon-192.png',
-        badge: basePayload.badge || '/assets/branding/menu-flow-symbol.png',
-      };
-      try {
-        await this.subscriptions.updateOne(
-          { _id: (subscription as any)._id },
-          {
-            $push: {
-              pendingNotifications: {
-                $each: [payload],
-                $slice: -8,
-              },
-            },
-          },
-        );
+      if ((!ignoreMasterPreference && !enabled) || (!ignoreTypePreference && !kindEnabled)) continue;
 
-        await sendWebPush(
-          {
-            endpoint: subscription.endpoint,
-            expirationTime: subscription.expirationTime ?? null,
-            keys: { p256dh: subscription.p256dh, auth: subscription.auth },
-          },
-          null,
-          this.vapid!,
-        );
-        sent += 1;
+      const payload = payloadFor(user);
+      const key = JSON.stringify([payload.title, payload.body, payload.url, payload.tag, payload.kind]);
+      const current = groups.get(key) || { payload, externalIds: [] };
+      current.externalIds.push(this.externalId(user._id.toString()));
+      groups.set(key, current);
+    }
+
+    let sent = 0;
+    for (const group of groups.values()) {
+      try {
+        sent += await this.sendOneSignal(group.externalIds, group.payload);
       } catch (error) {
-        if (error instanceof WebPushHttpError && (error.statusCode === 404 || error.statusCode === 410)) {
-          await this.subscriptions.deleteOne({ _id: (subscription as any)._id });
-          return;
-        }
-        this.logger.warn(`Falha ao enviar notificação push: ${error instanceof Error ? error.message : String(error)}`);
+        this.logger.warn(`Falha ao enviar notificação via OneSignal: ${error instanceof Error ? error.message : String(error)}`);
       }
-    }));
+    }
     return sent;
   }
 
-  private async countDevices(userId: Types.ObjectId) {
-    const deviceIds = await this.subscriptions.distinct('deviceId', {
-      userId,
-      deviceId: { $exists: true, $ne: '' },
+  private async sendOneSignal(externalIds: string[], payload: PushPayload) {
+    if (!externalIds.length) return 0;
+    const icon = this.absoluteUrl(payload.icon || '/assets/branding/menu-flow-notification-icon.png');
+    const badge = this.absoluteUrl(payload.badge || '/assets/branding/menu-flow-notification-icon.png');
+    const url = this.absoluteUrl(payload.url);
+
+    const response = await fetch('https://api.onesignal.com/notifications?c=push', {
+      method: 'POST',
+      headers: {
+        Authorization: `Key ${this.oneSignalApiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        app_id: this.oneSignalAppId,
+        target_channel: 'push',
+        include_aliases: { external_id: externalIds },
+        headings: { en: payload.title, pt: payload.title },
+        contents: { en: payload.body, pt: payload.body },
+        web_url: url,
+        chrome_web_icon: icon,
+        chrome_web_badge: badge,
+        name: `menu-flow-${payload.tag}`.slice(0, 128),
+        custom_data: {
+          source: 'MENU_FLOW',
+          type: payload.kind || 'notification',
+          route: payload.url,
+          tag: payload.tag,
+        },
+      }),
     });
-    if (deviceIds.length > 0) return deviceIds.length;
-    return this.subscriptions.countDocuments({ userId });
-  }
 
-  private async configureVapid() {
-    const envPublic = this.config.get<string>('WEB_PUSH_PUBLIC_KEY')?.trim();
-    const envPrivate = this.config.get<string>('WEB_PUSH_PRIVATE_KEY')?.trim();
-    let publicKey = envPublic;
-    let privateKey = envPrivate;
-
-    if (!publicKey || !privateKey) {
-      let stored = await this.vapidConfigs.findOne({ key: 'global' }).select('+privateKey').lean();
-      if (!stored) {
-        const generated = generateVapidKeys();
-        try {
-          const created = await this.vapidConfigs.create({ key: 'global', ...generated });
-          publicKey = created.publicKey;
-          privateKey = generated.privateKey;
-        } catch (error) {
-          if ((error as { code?: number }).code !== 11000) throw error;
-          stored = await this.vapidConfigs.findOne({ key: 'global' }).select('+privateKey').lean();
-        }
-      }
-      if (stored) {
-        publicKey = stored.publicKey;
-        privateKey = stored.privateKey;
-      }
+    const data = await response.json().catch(() => ({})) as OneSignalResponse;
+    if (!response.ok) {
+      throw new Error(`OneSignal respondeu ${response.status}: ${JSON.stringify(data.errors || data)}`);
     }
 
-    if (!publicKey || !privateKey) throw new Error('Não foi possível obter as chaves VAPID.');
-    const configuredSubject = this.config.get<string>('WEB_PUSH_SUBJECT')?.trim();
-    const frontendUrl = this.config.get<string>('FRONTEND_URL')?.split(',')[0]?.trim();
-    const subject = configuredSubject || (frontendUrl?.startsWith('https://') ? frontendUrl : 'mailto:notificacoes@menuflow.local');
-    this.vapid = { subject, publicKey, privateKey };
+    // A API pode não retornar recipients em alguns modos de targeting por alias.
+    // Nesse caso, a requisição aceita pelo OneSignal conta como envio para os IDs alvo.
+    return typeof data.recipients === 'number' ? data.recipients : externalIds.length;
+  }
+
+  private configureOneSignal() {
+    this.oneSignalAppId = this.config.get<string>('ONESIGNAL_APP_ID')?.trim() || DEFAULT_ONESIGNAL_APP_ID;
+    this.oneSignalApiKey =
+      this.config.get<string>('ONESIGNAL_REST_API_KEY')?.trim() ||
+      this.config.get<string>('ONESIGNAL_APP_API_KEY')?.trim() ||
+      this.config.get<string>('ONESIGNAL_API_KEY')?.trim() ||
+      '';
+
+    const configuredFrontend = this.config.get<string>('FRONTEND_URL')?.split(',')[0]?.trim();
+    if (configuredFrontend?.startsWith('http://') || configuredFrontend?.startsWith('https://')) {
+      this.frontendOrigin = configuredFrontend.replace(/\/$/, '');
+    }
+
+    if (this.oneSignalReady()) {
+      this.logger.log('Notificações OneSignal inicializadas para o Menu Flow.');
+    } else {
+      this.logger.warn('OneSignal não está pronto. Configure ONESIGNAL_REST_API_KEY no backend.');
+    }
+  }
+
+  private oneSignalReady() {
+    return Boolean(this.oneSignalAppId && this.oneSignalApiKey);
+  }
+
+  private externalId(userId: string) {
+    return `mf-staff:${userId}`;
+  }
+
+  private absoluteUrl(pathOrUrl: string) {
+    if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+    return `${this.frontendOrigin}${pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`}`;
+  }
+
+  private orderNumber(value?: string) {
+    const clean = value?.trim();
+    if (!clean) return 'Pedido';
+    return clean.startsWith('#') ? clean : `#${clean}`;
+  }
+
+  private statusNotification(status: string, number: string) {
+    const byStatus: Record<string, { title: string; body: string }> = {
+      PENDING: {
+        title: '⏳ Pedido aguardando aceitação',
+        body: `${number} está aguardando aceitação.`,
+      },
+      ACCEPTED: {
+        title: '✅ Pedido aceito',
+        body: `${number} foi aceito e entrou em andamento.`,
+      },
+      PREPARING: {
+        title: '👨‍🍳 Pedido em preparo',
+        body: `${number} começou a ser preparado.`,
+      },
+      READY: {
+        title: '📦 Pedido pronto',
+        body: `${number} está pronto para a próxima etapa.`,
+      },
+      OUT_FOR_DELIVERY: {
+        title: '🛵 Pedido saiu para entrega',
+        body: `${number} saiu para entrega ao cliente.`,
+      },
+      COMPLETED: {
+        title: '🎉 Pedido finalizado',
+        body: `${number} foi concluído com sucesso.`,
+      },
+      REJECTED: {
+        title: '❌ Pedido recusado',
+        body: `${number} foi recusado.`,
+      },
+      CANCELLED: {
+        title: '❌ Pedido cancelado',
+        body: `${number} foi cancelado.`,
+      },
+    };
+    return byStatus[status] || {
+      title: '🔔 Pedido atualizado',
+      body: `${number} teve uma atualização de status.`,
+    };
   }
 
   private objectId(value: string) {
     if (!Types.ObjectId.isValid(value)) throw new Error('Identificador inválido.');
     return new Types.ObjectId(value);
-  }
-
-  private statusLabel(status: string) {
-    return ({
-      PENDING: 'aguardando aceitação',
-      ACCEPTED: 'aceito',
-      PREPARING: 'em preparo',
-      READY: 'pronto',
-      OUT_FOR_DELIVERY: 'saiu para entrega',
-      COMPLETED: 'finalizado',
-      REJECTED: 'recusado',
-      CANCELLED: 'cancelado',
-    } as Record<string, string>)[status] || status.toLowerCase();
   }
 }

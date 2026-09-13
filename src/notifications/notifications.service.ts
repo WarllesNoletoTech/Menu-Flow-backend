@@ -278,20 +278,14 @@ export class NotificationsService implements OnModuleInit {
     if (!this.oneSignalReady() || users.length === 0) return 0;
 
     const userIds = users.map((user) => user._id as Types.ObjectId);
-    const [preferenceRows, subscriptionRows] = await Promise.all([
-      this.preferences.find({ userId: { $in: userIds } }).lean(),
-      this.oneSignalSubscriptions.find({ userId: { $in: userIds }, active: true }).lean(),
-    ]);
+    const preferenceRows = await this.preferences.find({ userId: { $in: userIds } }).lean();
     const preferenceByUser = new Map(preferenceRows.map((row) => [row.userId.toString(), row]));
-    const subscriptionsByUser = new Map<string, string[]>();
-    for (const row of subscriptionRows) {
-      const key = row.userId.toString();
-      const list = subscriptionsByUser.get(key) || [];
-      if (row.subscriptionId && !list.includes(row.subscriptionId)) list.push(row.subscriptionId);
-      subscriptionsByUser.set(key, list);
-    }
 
-    const groups = new Map<string, { payload: PushPayload; subscriptionIds: string[]; externalIds: string[] }>();
+    // O OneSignal recomenda identificar o usuário com External ID e deixar a
+    // própria plataforma resolver todas as inscrições ativas daquele usuário.
+    // Isso evita depender de Subscription IDs salvos no nosso banco que podem
+    // ficar obsoletos quando Chrome/Android rotaciona a inscrição em segundo plano.
+    const groups = new Map<string, { payload: PushPayload; externalIds: string[] }>();
     for (const user of users) {
       const userId = user._id.toString();
       const preference = preferenceByUser.get(userId);
@@ -301,26 +295,15 @@ export class NotificationsService implements OnModuleInit {
 
       const payload = payloadFor(user);
       const key = JSON.stringify([payload.title, payload.body, payload.url, payload.tag, payload.kind]);
-      const current = groups.get(key) || { payload, subscriptionIds: [], externalIds: [] };
-      const directSubscriptions = subscriptionsByUser.get(userId) || [];
-      if (directSubscriptions.length) {
-        for (const subscriptionId of directSubscriptions) {
-          if (!current.subscriptionIds.includes(subscriptionId)) current.subscriptionIds.push(subscriptionId);
-        }
-      } else {
-        // Compatibilidade para usuários que ainda não abriram a v41 para registrar
-        // o Subscription ID diretamente no backend.
-        current.externalIds.push(this.externalId(userId));
-      }
+      const current = groups.get(key) || { payload, externalIds: [] };
+      const externalId = this.externalId(userId);
+      if (!current.externalIds.includes(externalId)) current.externalIds.push(externalId);
       groups.set(key, current);
     }
 
     let sent = 0;
     for (const group of groups.values()) {
       try {
-        if (group.subscriptionIds.length) {
-          sent += await this.sendOneSignalToSubscriptions(group.subscriptionIds, group.payload);
-        }
         if (group.externalIds.length) {
           sent += await this.sendOneSignalToAliases(group.externalIds, group.payload);
         }

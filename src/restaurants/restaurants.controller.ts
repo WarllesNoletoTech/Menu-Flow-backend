@@ -102,6 +102,10 @@ export class RestaurantsController {
   @Get(':restaurantId/admin-detail') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) adminDetail(@Param('restaurantId') id: string) { return this.restaurants.adminDetail(id); }
   @Get(':restaurantId/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) businessHours(@Param('restaurantId') id: string) { return this.restaurants.businessHours(id); }
   @Patch(':restaurantId/business-hours') @Header('Cache-Control', 'no-store, private') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateBusinessHours(@Param('restaurantId') id: string, @Req() request: { user: { sub: string } }, @Body() body: BusinessHoursDto) { return this.restaurants.updateBusinessHours(id, body.days, request.user.sub, true); }
+  @Post(':restaurantId/delivery-zones') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  saveDeliveryZone(@Param('restaurantId') id: string, @Body() body: DeliveryZoneDto) { return this.restaurants.saveDeliveryZone(id, body); }
+  @Patch(':restaurantId/payment-methods') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard)
+  savePaymentMethod(@Param('restaurantId') id: string, @Body() body: PaymentMethodDto) { return this.restaurants.savePaymentMethod(id, body); }
   @Patch(':restaurantId/with-owner') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) updateWithOwner(@Param('restaurantId') id: string, @Body() body: UpdateWithOwnerDto) { return this.restaurants.updateWithOwner(id, body.establishment, body.owner); }
   @Post(':restaurantId/owners') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) addOwner(@Param('restaurantId') id: string, @Body() body: OwnerDto) { return this.restaurants.addOwner(id, body); }
   @Post(':restaurantId/employees') @Roles(Role.SUPER_ADMIN) @UseGuards(JwtGuard, RolesGuard) addEmployee(@Param('restaurantId') id: string, @Body() body: EmployeeDto) { return this.restaurants.addEmployee(id, body); }

@@ -28,6 +28,7 @@ import { MENU_FLOW_ORDER_SERVICE_FEE_CENTS } from "../billing/billing-rules";
 import { zonedDateRange, type ZonedRange } from "../common/date-range";
 import { RappidexIntegrationService } from "../integrations/rappidex.service";
 import { applyAddonPricing } from "./addon-pricing";
+import { NotificationsService } from "../notifications/notifications.service";
 
 export type CheckoutItem = {
   productId: string;
@@ -182,6 +183,7 @@ export class OrdersService {
     @InjectModel(Payment.name) private readonly payments: Model<Payment>,
     private readonly gateway: OrdersGateway,
     private readonly config: ConfigService,
+    private readonly notifications: NotificationsService,
     @Optional()
     private readonly rappidex?: RappidexIntegrationService,
   ) {}
@@ -509,7 +511,17 @@ export class OrdersService {
         },
         { upsert: true },
       );
-      this.gateway.publishNewOrder(rid.toHexString(), order.toJSON());
+      this.gateway.publishNewOrder(rid.toHexString(), {
+        ...order.toJSON(),
+        restaurantName: restaurant.tradeName || restaurant.name,
+      });
+      void this.notifications.notifyNewOrder({
+        restaurantId: rid.toHexString(),
+        restaurantName: restaurant.tradeName || restaurant.name,
+        orderNumber: order.orderNumber,
+        totalCents: order.totalCents,
+        fulfillment: order.fulfillment,
+      }).catch(() => undefined);
       return this.checkoutResponse(order.toObject(), restaurant);
     } catch (error) {
       if ((error as { code?: number }).code === 11000 && idempotencyKey) {
@@ -731,6 +743,19 @@ export class OrdersService {
       order.customerId?.toString(),
       order.toJSON(),
     );
+    if (status === "CANCELLED" || status === "REJECTED") {
+      void this.notifications.notifyOrderCancelled({
+        restaurantId: rid.toHexString(),
+        orderNumber: order.orderNumber,
+        reason: status === "REJECTED" ? order.rejectionReason : order.cancellationReason,
+      }).catch(() => undefined);
+    } else {
+      void this.notifications.notifyOrderStatus({
+        restaurantId: rid.toHexString(),
+        orderNumber: order.orderNumber,
+        status,
+      }).catch(() => undefined);
+    }
     this.rappidex?.handleOrderStatusChange(order._id.toString(), status);
     return order;
   }

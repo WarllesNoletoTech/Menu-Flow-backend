@@ -118,6 +118,38 @@ export type UserDocument = HydratedDocument<User>;
 export const UserSchema = SchemaFactory.createForClass(User);
 
 @Schema({ timestamps: true })
+export class NotificationPreference {
+  @Prop({ type: Types.ObjectId, ref: "User", required: true, unique: true, index: true })
+  userId!: Types.ObjectId;
+  @Prop({ default: true }) enabled!: boolean;
+  @Prop({ default: true }) newOrder!: boolean;
+  @Prop({ default: true }) orderCancelled!: boolean;
+  @Prop({ default: false }) orderStatus!: boolean;
+}
+export const NotificationPreferenceSchema = SchemaFactory.createForClass(NotificationPreference);
+
+@Schema({ timestamps: true })
+export class PushSubscriptionRecord {
+  @Prop({ type: Types.ObjectId, ref: "User", required: true, index: true })
+  userId!: Types.ObjectId;
+  @Prop({ required: true, unique: true, trim: true }) endpoint!: string;
+  @Prop({ required: true }) p256dh!: string;
+  @Prop({ required: true }) auth!: string;
+  @Prop({ type: Number, default: null }) expirationTime?: number | null;
+  @Prop() userAgent?: string;
+}
+export const PushSubscriptionRecordSchema = SchemaFactory.createForClass(PushSubscriptionRecord);
+PushSubscriptionRecordSchema.index({ userId: 1, updatedAt: -1 });
+
+@Schema({ timestamps: true })
+export class PushVapidConfig {
+  @Prop({ required: true, unique: true, default: "global" }) key!: string;
+  @Prop({ required: true }) publicKey!: string;
+  @Prop({ required: true, select: false }) privateKey!: string;
+}
+export const PushVapidConfigSchema = SchemaFactory.createForClass(PushVapidConfig);
+
+@Schema({ timestamps: true })
 export class Category {
   @Prop({
     type: Types.ObjectId,

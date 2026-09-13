@@ -7,9 +7,10 @@ import { OrdersService } from './orders.service';
 import { AuthModule } from '../auth/auth.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { OrdersRealtimeModule } from './orders-realtime.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [AuthModule, IntegrationsModule, OrdersRealtimeModule, MongooseModule.forFeature([
+  imports: [AuthModule, IntegrationsModule, OrdersRealtimeModule, NotificationsModule, MongooseModule.forFeature([
     { name: Order.name, schema: OrderSchema },
     { name: Category.name, schema: CategorySchema },
     { name: Product.name, schema: ProductSchema },

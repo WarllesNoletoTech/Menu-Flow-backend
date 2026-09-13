@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -151,7 +152,21 @@ export class NotificationsService implements OnModuleInit {
     if (deviceId && saved) {
       await this.subscriptions.deleteMany({ userId: uid, deviceId, _id: { $ne: saved._id } });
     }
-    return { ok: true, deviceCount: await this.countDevices(uid) };
+
+    let deliveryToken = saved?.deliveryToken?.trim();
+    if (!deliveryToken && saved) {
+      deliveryToken = randomBytes(32).toString('base64url');
+      await this.subscriptions.updateOne(
+        { _id: saved._id },
+        { $set: { deliveryToken } },
+      );
+    }
+
+    return {
+      ok: true,
+      deviceCount: await this.countDevices(uid),
+      deliveryToken: deliveryToken || null,
+    };
   }
 
   async removeSubscription(userId: string, endpoint: string) {
@@ -183,6 +198,7 @@ export class NotificationsService implements OnModuleInit {
     const existing = await this.subscriptions.findOne({ endpoint: subscription.endpoint });
     if (existing && existing._id.toString() !== previous._id.toString()) {
       if (existing.userId.toString() !== previous.userId.toString()) return { ok: false };
+      const deliveryToken = previous.deliveryToken || existing.deliveryToken || randomBytes(32).toString('base64url');
       await this.subscriptions.updateOne(
         { _id: existing._id },
         {
@@ -192,14 +208,16 @@ export class NotificationsService implements OnModuleInit {
             expirationTime: subscription.expirationTime ?? null,
             deviceId: previous.deviceId,
             userAgent: previous.userAgent,
+            deliveryToken,
             lastSeenAt: new Date(),
           },
         },
       );
       await this.subscriptions.deleteOne({ _id: previous._id });
-      return { ok: true };
+      return { ok: true, deliveryToken };
     }
 
+    const deliveryToken = previous.deliveryToken || randomBytes(32).toString('base64url');
     await this.subscriptions.updateOne(
       { _id: previous._id },
       {
@@ -208,11 +226,31 @@ export class NotificationsService implements OnModuleInit {
           p256dh: subscription.keys.p256dh,
           auth: subscription.keys.auth,
           expirationTime: subscription.expirationTime ?? null,
+          deliveryToken,
           lastSeenAt: new Date(),
         },
       },
     );
-    return { ok: true };
+    return { ok: true, deliveryToken };
+  }
+
+  async pullPendingNotifications(deliveryToken: string) {
+    const token = deliveryToken?.trim();
+    if (!token || token.length < 20 || token.length > 200) {
+      return { ok: false, notifications: [] as PushPayload[] };
+    }
+
+    const row = await this.subscriptions.findOneAndUpdate(
+      { deliveryToken: token },
+      { $set: { pendingNotifications: [], lastSeenAt: new Date() } },
+      { new: false },
+    ).lean();
+
+    if (!row) return { ok: false, notifications: [] as PushPayload[] };
+    const notifications = Array.isArray(row.pendingNotifications)
+      ? (row.pendingNotifications as unknown as PushPayload[]).filter((item) => Boolean(item && typeof item === 'object'))
+      : [];
+    return { ok: true, notifications: notifications.slice(-8) };
   }
 
   async sendTest(userId: string) {
@@ -324,19 +362,32 @@ export class NotificationsService implements OnModuleInit {
       const enabled = preference?.enabled ?? true;
       const kindEnabled = preference?.[kind] ?? (kind === 'orderStatus' ? false : true);
       if ((!ignoreMasterPreference && !enabled) || (!ignoreTypePreference && !kindEnabled)) return;
-      const payload = payloadFor(user);
+      const basePayload = payloadFor(user);
+      const payload = {
+        ...basePayload,
+        icon: basePayload.icon || '/assets/branding/menu-flow-icon-192.png',
+        badge: basePayload.badge || '/assets/branding/menu-flow-symbol.png',
+      };
       try {
+        await this.subscriptions.updateOne(
+          { _id: (subscription as any)._id },
+          {
+            $push: {
+              pendingNotifications: {
+                $each: [payload],
+                $slice: -8,
+              },
+            },
+          },
+        );
+
         await sendWebPush(
           {
             endpoint: subscription.endpoint,
             expirationTime: subscription.expirationTime ?? null,
             keys: { p256dh: subscription.p256dh, auth: subscription.auth },
           },
-          JSON.stringify({
-            ...payload,
-            icon: payload.icon || '/assets/branding/menu-flow-icon-192.png',
-            badge: payload.badge || '/assets/branding/menu-flow-symbol.png',
-          }),
+          null,
           this.vapid!,
         );
         sent += 1;

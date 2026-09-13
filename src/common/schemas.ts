@@ -139,12 +139,18 @@ export class PushSubscriptionRecord {
   @Prop({ type: Number, default: null }) expirationTime?: number | null;
   @Prop() userAgent?: string;
   @Prop() lastSeenAt?: Date;
+  @Prop({ trim: true, maxlength: 200 }) deliveryToken?: string;
+  @Prop({ type: [Object], default: [] }) pendingNotifications?: Array<Record<string, unknown>>;
 }
 export const PushSubscriptionRecordSchema = SchemaFactory.createForClass(PushSubscriptionRecord);
 PushSubscriptionRecordSchema.index({ userId: 1, updatedAt: -1 });
 PushSubscriptionRecordSchema.index(
   { userId: 1, deviceId: 1 },
   { unique: true, partialFilterExpression: { deviceId: { $type: "string" } } },
+);
+PushSubscriptionRecordSchema.index(
+  { deliveryToken: 1 },
+  { unique: true, partialFilterExpression: { deliveryToken: { $type: "string" } } },
 );
 
 @Schema({ timestamps: true })

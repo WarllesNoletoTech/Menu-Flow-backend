@@ -141,25 +141,33 @@ export function createVapidJwt(endpoint: string, details: VapidDetails) {
 
 export async function sendWebPush(
   subscription: NativePushSubscription,
-  payload: string,
+  payload: string | null,
   vapid: VapidDetails,
 ) {
-  const body = encryptWebPushPayload(
-    Buffer.from(payload, 'utf8'),
-    subscription.keys.p256dh,
-    subscription.keys.auth,
-  );
   const jwt = createVapidJwt(subscription.endpoint, vapid);
+  const hasPayload = typeof payload === 'string' && payload.length > 0;
+  const body = hasPayload
+    ? encryptWebPushPayload(
+        Buffer.from(payload, 'utf8'),
+        subscription.keys.p256dh,
+        subscription.keys.auth,
+      )
+    : undefined;
+
+  const headers: Record<string, string> = {
+    Authorization: `vapid t=${jwt}, k=${vapid.publicKey}`,
+    TTL: '86400',
+    Urgency: 'high',
+  };
+  if (hasPayload) {
+    headers['Content-Encoding'] = 'aes128gcm';
+    headers['Content-Type'] = 'application/octet-stream';
+  }
+
   const response = await fetch(subscription.endpoint, {
     method: 'POST',
-    headers: {
-      Authorization: `vapid t=${jwt}, k=${vapid.publicKey}`,
-      'Content-Encoding': 'aes128gcm',
-      'Content-Type': 'application/octet-stream',
-      TTL: '86400',
-      Urgency: 'high',
-    },
-    body: body as unknown as BodyInit,
+    headers,
+    ...(body ? { body: body as unknown as BodyInit } : {}),
   });
   if (!response.ok) {
     const responseBody = await response.text().catch(() => '');

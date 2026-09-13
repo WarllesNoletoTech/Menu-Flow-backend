@@ -138,6 +138,51 @@ export class RappidexIntegrationService implements OnModuleInit, OnModuleDestroy
     });
   }
 
+  /**
+   * Confirma o cancelamento na Rappidex antes de o Menu Flow gravar o pedido
+   * como CANCELLED. Isso evita divergencia entre os sistemas e preserva a
+   * regra de que uma entrega ja assumida por motoboy nao pode ser cancelada
+   * pelo Menu Flow, mesmo quando o webhook da Rappidex ainda nao chegou.
+   */
+  async cancelDeliveryBeforeMenuFlowCancel(orderId: string) {
+    if (!Types.ObjectId.isValid(orderId)) return;
+    const order = await this.orders.findById(orderId).lean();
+    if (!order || order.fulfillment !== 'DELIVERY') return;
+
+    if (this.isDeliveryAssignedStatus(order.rappidexStatus)) {
+      throw new ConflictException(
+        'A entrega já foi assumida por um motoboy. O cancelamento deve ser feito pela Rappidex.',
+      );
+    }
+
+    const integrationWasCreated = Boolean(
+      order.rappidexDeliveryId || order.rappidexSyncStatus === 'SYNCED',
+    );
+    if (!integrationWasCreated) {
+      await this.orders.updateOne(
+        { _id: order._id },
+        {
+          $set: {
+            rappidexSyncRequested: false,
+            rappidexReleaseRequested: false,
+            rappidexCancelRequested: false,
+          },
+        },
+      );
+      return;
+    }
+
+    try {
+      await this.requestCancellation(orderId, false);
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new ConflictException(
+        `Não foi possível confirmar o cancelamento na Rappidex. O pedido continua ativo no Menu Flow. ${detail}`,
+      );
+    }
+  }
+
   async applyStatusUpdate(event: RappidexStatusEvent) {
     if (!Types.ObjectId.isValid(event.orderId)) {
       throw new NotFoundException('Pedido Menu Flow não encontrado.');
@@ -473,9 +518,9 @@ export class RappidexIntegrationService implements OnModuleInit, OnModuleDestroy
     );
 
     try {
-      const response = await this.request<RappidexReleaseResponse>(
-        `/integrations/menuflow/deliveries/${encodeURIComponent(order._id.toString())}/release`,
-        { method: 'POST' },
+      const response = await this.requestDeliveryAction<RappidexReleaseResponse>(
+        order,
+        'release',
       );
       const nextStatus = response?.delivery?.status;
       await this.orders.updateOne(
@@ -507,12 +552,31 @@ export class RappidexIntegrationService implements OnModuleInit, OnModuleDestroy
     }
   }
 
-  private async requestCancellation(orderId: string) {
+  private async requestCancellation(orderId: string, retryOnFailure = true) {
     if (!Types.ObjectId.isValid(orderId)) return;
     const order = await this.orders.findById(orderId).lean();
     if (!order || order.fulfillment !== 'DELIVERY') return;
 
-    const integrationWasCreated = Boolean(order.rappidexDeliveryId || order.rappidexSyncStatus === 'SYNCED');
+    if (
+      order.rappidexSyncStatus === 'CANCELLED' ||
+      order.rappidexStatus === 'CANCELADO'
+    ) {
+      await this.orders.updateOne(
+        { _id: order._id },
+        {
+          $set: {
+            rappidexSyncRequested: false,
+            rappidexReleaseRequested: false,
+            rappidexCancelRequested: false,
+          },
+        },
+      );
+      return;
+    }
+
+    const integrationWasCreated = Boolean(
+      order.rappidexDeliveryId || order.rappidexSyncStatus === 'SYNCED',
+    );
     if (!integrationWasCreated) {
       await this.orders.updateOne(
         { _id: order._id },
@@ -533,13 +597,54 @@ export class RappidexIntegrationService implements OnModuleInit, OnModuleDestroy
     );
 
     try {
-      const response = await this.request<RappidexCancelResponse>(
-        `/integrations/menuflow/deliveries/${encodeURIComponent(order._id.toString())}/cancel`,
-        { method: 'POST' },
+      const response = await this.requestDeliveryAction<RappidexCancelResponse>(
+        order,
+        'cancel',
       );
-      if (response?.cancelled === false && response?.locked) {
-        throw new Error('A entrega já foi assumida por um motoboy e não pode mais ser cancelada pelo Menu Flow.');
+      const responseStatus = String(response?.status || '').trim();
+
+      if (response?.locked) {
+        await this.orders.updateOne(
+          { _id: order._id },
+          {
+            $set: {
+              rappidexCancelRequested: false,
+              rappidexSyncStatus: 'SYNCED',
+              rappidexSyncError:
+                'A entrega já foi assumida por um motoboy e não pode mais ser cancelada pelo Menu Flow.',
+              ...(responseStatus
+                ? {
+                    rappidexStatus: responseStatus,
+                    rappidexStatusLabel:
+                      RAPPIDEX_STATUS_LABELS[responseStatus] || responseStatus,
+                    rappidexLastUpdateAt: new Date(),
+                  }
+                : {}),
+            },
+          },
+        );
+        throw new ConflictException(
+          'A entrega já foi assumida por um motoboy. O cancelamento deve ser feito pela Rappidex.',
+        );
       }
+
+      if (response?.finished) {
+        throw new ConflictException(
+          'A entrega já foi finalizada na Rappidex e não pode ser cancelada pelo Menu Flow.',
+        );
+      }
+
+      const remoteCancelled =
+        response?.cancelled === true || responseStatus === 'CANCELADO';
+      if (!remoteCancelled) {
+        throw new Error(
+          response?.found === false
+            ? 'A entrega vinculada ao pedido não foi encontrada na Rappidex.'
+            : 'A Rappidex não confirmou o cancelamento da entrega.',
+        );
+      }
+
+      const cancelledAt = new Date();
       await this.orders.updateOne(
         { _id: order._id },
         {
@@ -549,22 +654,79 @@ export class RappidexIntegrationService implements OnModuleInit, OnModuleDestroy
             rappidexCancelRequested: false,
             rappidexSyncStatus: 'CANCELLED',
             rappidexSyncError: '',
+            rappidexStatus: 'CANCELADO',
+            rappidexStatusLabel: RAPPIDEX_STATUS_LABELS.CANCELADO,
+            rappidexLastUpdateAt: cancelledAt,
           },
         },
       );
     } catch (error) {
+      if (error instanceof ConflictException) throw error;
       await this.orders.updateOne(
         { _id: order._id },
         {
           $set: {
-            rappidexCancelRequested: true,
-            rappidexSyncStatus: 'CANCEL_PENDING',
+            rappidexCancelRequested: retryOnFailure,
+            rappidexSyncStatus: retryOnFailure
+              ? 'CANCEL_PENDING'
+              : order.rappidexSyncStatus || 'SYNCED',
             rappidexSyncError: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
           },
         },
       );
       throw error;
     }
+  }
+
+  /**
+   * As versoes da integracao Rappidex ja usaram tanto o ID remoto da entrega
+   * quanto o ID do pedido Menu Flow na rota. Tentamos primeiro o ID remoto
+   * (fonte autoritativa) e fazemos fallback para o ID do pedido quando a API
+   * responder que nao encontrou o registro. Assim release/cancel continuam
+   * compativeis e um `found: false` nunca e tratado como sucesso silencioso.
+   */
+  private async requestDeliveryAction<T extends { found?: boolean }>(
+    order: any,
+    action: 'release' | 'cancel',
+  ): Promise<T> {
+    const identifiers = [
+      String(order.rappidexDeliveryId || '').trim(),
+      order._id.toString(),
+    ].filter((value, index, values) => value && values.indexOf(value) === index);
+
+    let lastResponse: T | undefined;
+    let lastError: unknown;
+
+    for (let index = 0; index < identifiers.length; index += 1) {
+      const identifier = identifiers[index];
+      const hasFallback = index < identifiers.length - 1;
+      try {
+        const response = await this.request<T>(
+          `/integrations/menuflow/deliveries/${encodeURIComponent(identifier)}/${action}`,
+          { method: 'POST' },
+        );
+        lastResponse = response;
+        if (response?.found === false && hasFallback) continue;
+        return response;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (hasFallback && /(?:404|nao encontr|não encontr|not found)/i.test(message)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (lastResponse?.found === false) {
+      throw new Error(
+        `A entrega vinculada ao pedido não foi encontrada na Rappidex para ${action === 'cancel' ? 'cancelamento' : 'liberação'}.`,
+      );
+    }
+    if (lastResponse) return lastResponse;
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('A Rappidex não respondeu à operação solicitada.');
   }
 
   private async retryPending() {

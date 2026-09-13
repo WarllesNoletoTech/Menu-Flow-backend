@@ -687,6 +687,14 @@ export class OrdersService {
       throw new ConflictException(
         "A entrega já foi assumida por um motoboy. O cancelamento deve ser feito pela Rappidex.",
       );
+    if (hasRappidexDelivery && status === "CANCELLED") {
+      // A Rappidex precisa confirmar primeiro. Se ela já tiver atribuído um
+      // motoboy (mesmo antes do webhook chegar), o cancelamento é recusado e
+      // o Menu Flow mantém o pedido ativo.
+      await this.rappidex?.cancelDeliveryBeforeMenuFlowCancel(
+        order._id.toString(),
+      );
+    }
     const now = new Date();
     order.status = status;
     if (!Array.isArray(order.statusHistory)) order.statusHistory = [];

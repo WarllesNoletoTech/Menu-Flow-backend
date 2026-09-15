@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import type { SignOptions } from 'jsonwebtoken';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { Model, Types } from 'mongoose';
@@ -62,6 +63,18 @@ export class AuthService implements OnModuleInit {
     if (!user || !user.active) throw new UnauthorizedException('Invalid credentials');
     return this.profile(user.id);
   }
-  async login(email: string, password: string) { const user = await this.users.findOne({ email: email.trim().toLowerCase(), $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] }).select('+passwordHash'); if (!user || !user.active || !(await bcrypt.compare(password, user.passwordHash))) throw new UnauthorizedException('Invalid credentials'); await this.validateMembership(user.role, user.restaurantId?.toString()); return { accessToken: await this.jwt.signAsync({ sub: user.id, role: user.role, ...(user.restaurantId ? { restaurantId: user.restaurantId.toString() } : {}) }), user: { id: user.id, name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString() } }; }
+  async login(email: string, password: string) {
+    const user = await this.users.findOne({ email: email.trim().toLowerCase(), $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] }).select('+passwordHash');
+    if (!user || !user.active || !(await bcrypt.compare(password, user.passwordHash))) throw new UnauthorizedException('Invalid credentials');
+    await this.validateMembership(user.role, user.restaurantId?.toString());
+    const payload = { sub: user.id, role: user.role, ...(user.restaurantId ? { restaurantId: user.restaurantId.toString() } : {}) };
+    // Cliente permanece conectado por mais tempo sem alterar a duração das
+    // sessões administrativas/lojista. Pode ser sobrescrito por variável de ambiente.
+    const customerExpiresIn = (this.config.get<string>('CUSTOMER_JWT_EXPIRES_IN') ?? '90d') as SignOptions['expiresIn'];
+    const accessToken = user.role === Role.CUSTOMER
+      ? await this.jwt.signAsync(payload, { expiresIn: customerExpiresIn })
+      : await this.jwt.signAsync(payload);
+    return { accessToken, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString() } };
+  }
   private async validateMembership(role: Role, restaurantId?: string) { const membership = role === Role.RESTAURANT_ADMIN || role === Role.EMPLOYEE; if (!membership) { if (restaurantId) throw new UnauthorizedException('Invalid credentials'); return; } if (!restaurantId || !Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: new Types.ObjectId(restaurantId), blocked: false }))) throw new UnauthorizedException('Invalid credentials'); }
 }

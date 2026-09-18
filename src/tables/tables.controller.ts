@@ -59,6 +59,7 @@ export class TablesController {
   @Get('sessions/:sessionId') session(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string) { return this.tables.session(req.user, sessionId); }
   @Get('sessions/:sessionId/events') events(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string) { return this.tables.events(req.user, sessionId); }
   @Post('sessions/:sessionId/orders') order(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: CreateTableOrderDto) { return this.tables.addOrder(req.user, sessionId, body.items); }
+  @Patch('sessions/:sessionId/orders/:orderId/ready') readyOrder(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Param('orderId') orderId: string) { return this.tables.markOrderReady(req.user, sessionId, orderId); }
   @Patch('sessions/:sessionId/orders/:orderId/delivered') deliverOrder(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Param('orderId') orderId: string) { return this.tables.deliverOrder(req.user, sessionId, orderId); }
   @Patch('sessions/:sessionId/orders/:orderId/cancel') cancelOrder(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Param('orderId') orderId: string, @Body() body: CancelTableOrderDto) { return this.tables.cancelOrder(req.user, sessionId, orderId, body.reason); }
   @Patch('sessions/:sessionId/request-bill') requestBill(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string) { return this.tables.requestBill(req.user, sessionId); }

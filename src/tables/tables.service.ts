@@ -6,6 +6,8 @@ import { Role } from '../common/roles';
 import { Order, RestaurantSettings, RestaurantTable, TableEvent, TableSession, User } from '../common/schemas';
 import { OrdersService, type CheckoutItem } from '../orders/orders.service';
 import type { TablePermission } from './table-permissions';
+import { PrinterService } from '../printer/printer.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export type TableActor = { sub: string; role: Role; restaurantId: string };
 
@@ -19,6 +21,8 @@ export class TablesService {
     @InjectModel(User.name) private readonly users: Model<User>,
     @InjectModel(RestaurantSettings.name) private readonly settings: Model<RestaurantSettings>,
     private readonly ordersService: OrdersService,
+    private readonly printer: PrinterService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async context(actor: TableActor) {
@@ -181,7 +185,22 @@ export class TablesService {
     }, actor.sub);
     await this.recalculate(session._id);
     await this.event(actor, session._id, 'ORDER_ADDED', table._id, { orderId: (order as any)._id?.toString(), orderNumber: (order as any).orderNumber, totalCents: (order as any).totalCents });
+    void this.printer.queueKitchenOrder(actor.restaurantId, (order as any)._id.toString(), true).catch(() => undefined);
     return this.session(actor, session._id.toString());
+  }
+
+  async markOrderReady(actor: TableActor, sessionId: string, orderId: string) {
+    await this.assertPermission(actor, 'TABLES_KITCHEN');
+    const rid = this.rid(actor);
+    const session = await this.activeSession(rid, sessionId);
+    const order = await this.orders.findOne({ _id: this.oid(orderId, 'Pedido não encontrado.'), restaurantId: rid, tableSessionId: session._id, fulfillment: 'TABLE' }).lean();
+    if (!order) throw new NotFoundException('Pedido de mesa não encontrado nesta comanda.');
+    if (order.status === 'READY') return this.session(actor, sessionId);
+    if (order.status !== 'PREPARING') throw new ConflictException('Somente pedidos em preparo podem ser marcados como prontos.');
+    await this.ordersService.updateStatus(actor.restaurantId, order._id.toString(), 'READY', actor.sub);
+    void this.printer.discardAutoKitchen(order._id.toString()).catch(() => undefined);
+    await this.event(actor, session._id, 'ORDER_READY', order.tableId ?? session.primaryTableId, { orderId: order._id.toString(), orderNumber: order.orderNumber });
+    return this.session(actor, sessionId);
   }
 
   async deliverOrder(actor: TableActor, sessionId: string, orderId: string) {
@@ -217,6 +236,13 @@ export class TablesService {
     session.status = 'AWAITING_PAYMENT';
     await session.save();
     await this.event(actor, session._id, 'BILL_REQUESTED', session.primaryTableId, { totalCents: session.totalCents, balanceCents: session.balanceCents });
+    const primaryTable = await this.tables.findById(session.primaryTableId).select('name').lean();
+    void this.notifications.notifyTableBillRequested({
+      restaurantId: actor.restaurantId,
+      tableName: primaryTable?.name || 'Mesa',
+      totalCents: session.totalCents,
+    }).catch(() => undefined);
+    void this.printer.queueBill(actor.restaurantId, session._id.toString(), true).catch(() => undefined);
     return this.session(actor, sessionId);
   }
 
@@ -320,6 +346,7 @@ export class TablesService {
     if (activeOrders.length) throw new ConflictException('Existem pedidos que ainda não foram entregues na mesa.');
     const delivered = await this.orders.find({ restaurantId: rid, tableSessionId: fresh._id, status: 'DELIVERED_TO_TABLE' }).select('_id').lean();
     for (const order of delivered) await this.ordersService.updateStatus(actor.restaurantId, order._id.toString(), 'COMPLETED', actor.sub);
+    void this.printer.discardAutoBill(fresh._id.toString()).catch(() => undefined);
     fresh.status = 'CLOSED';
     fresh.active = false;
     fresh.closedAt = new Date();
@@ -365,11 +392,13 @@ export class TablesService {
     if (actor.role !== Role.EMPLOYEE) throw new ForbiddenException('Acesso não autorizado.');
     const rid = this.rid(actor);
     const [employee, settings] = await Promise.all([
-      this.users.findOne({ _id: this.oid(actor.sub, 'Funcionário inválido.'), restaurantId: rid, role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions').lean(),
+      this.users.findOne({ _id: this.oid(actor.sub, 'Funcionário inválido.'), restaurantId: rid, role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(),
       this.settings.findOne({ restaurantId: rid }).select('tableServiceEnabled waiterAppEnabled').lean(),
     ]);
     if (!settings?.tableServiceEnabled || !settings?.waiterAppEnabled) throw new ForbiddenException('O app do garçom não está habilitado para este estabelecimento.');
-    if (!employee || !(employee.permissions ?? []).includes(permission)) throw new ForbiddenException('Seu usuário não possui permissão para esta ação no salão.');
+    const implied = employee?.employeePosition === 'KITCHEN' && ['TABLES_VIEW','TABLES_KITCHEN','TABLES_PRINT'].includes(permission)
+      || employee?.employeePosition === 'CASHIER' && ['TABLES_VIEW','TABLES_PAYMENT','TABLES_PRINT','TABLES_CLOSE'].includes(permission);
+    if (!employee || (!(employee.permissions ?? []).includes(permission) && !implied)) throw new ForbiddenException('Seu usuário não possui permissão para esta ação no salão.');
   }
 
   private assertOwner(actor: TableActor) {

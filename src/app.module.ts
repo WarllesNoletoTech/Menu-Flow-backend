@@ -16,6 +16,7 @@ import { EstablishmentTypesModule } from './establishment-types/establishment-ty
 import { HomeBannersModule } from './home-banners/home-banners.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { TablesModule } from './tables/tables.module';
+import { PrinterModule } from './printer/printer.module';
 
 function validateEnvironment(environment: Record<string, unknown>) {
   for (const variable of ['MONGODB_URI', 'JWT_SECRET']) {
@@ -32,7 +33,7 @@ function validateEnvironment(environment: Record<string, unknown>) {
 }
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnvironment }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ uri: config.getOrThrow<string>('MONGODB_URI'), serverSelectionTimeoutMS: 10000, retryAttempts: 5, retryDelay: 1000 }) }), AuthModule, EstablishmentTypesModule, HomeBannersModule, RestaurantsModule, CatalogModule, NotificationsModule, OrdersModule, TablesModule, UsersModule, CustomersModule, LocationsModule, BillingModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnvironment }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ uri: config.getOrThrow<string>('MONGODB_URI'), serverSelectionTimeoutMS: 10000, retryAttempts: 5, retryDelay: 1000 }) }), AuthModule, EstablishmentTypesModule, HomeBannersModule, RestaurantsModule, CatalogModule, NotificationsModule, OrdersModule, PrinterModule, TablesModule, UsersModule, CustomersModule, LocationsModule, BillingModule],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

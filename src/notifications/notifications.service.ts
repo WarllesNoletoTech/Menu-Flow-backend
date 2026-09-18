@@ -199,12 +199,16 @@ export class NotificationsService implements OnModuleInit {
     await this.sendToUsers(users, 'newOrder', (user) => ({
       title: user.role === Role.SUPER_ADMIN
         ? `🛎️ Novo pedido • ${input.restaurantName}`
-        : '🛎️ Novo pedido recebido!',
+        : input.fulfillment === 'TABLE' ? '🍽️ Novo pedido de mesa' : '🛎️ Novo pedido recebido!',
       body: user.role === Role.SUPER_ADMIN
         ? `${number} • ${total} • ${service}. Toque para acompanhar.`
-        : `${number} • ${total} • ${service}. Toque para abrir e aceitar o pedido.`,
+        : input.fulfillment === 'TABLE'
+          ? `${number} • ${total} • ${service}. O pedido foi enviado direto para a cozinha.`
+          : `${number} • ${total} • ${service}. Toque para abrir e aceitar o pedido.`,
       tag: `new-order-${input.orderNumber || Date.now()}`,
-      url: user.role === Role.SUPER_ADMIN ? '/admin/pedidos?status=pending' : '/empresa/pedidos?status=pending',
+      url: user.role === Role.SUPER_ADMIN
+        ? '/admin/pedidos'
+        : input.fulfillment === 'TABLE' ? '/empresa/mesas' : '/empresa/pedidos?status=pending',
       kind: 'newOrder',
     }));
   }
@@ -255,6 +259,33 @@ export class NotificationsService implements OnModuleInit {
       url: user.role === Role.SUPER_ADMIN ? '/admin/pedidos' : '/empresa/pedidos',
       kind: 'orderStatus',
     }));
+  }
+
+  async notifyTableBillRequested(input: { restaurantId: string; tableName: string; totalCents: number }) {
+    if (!Types.ObjectId.isValid(input.restaurantId)) return;
+    const rid = new Types.ObjectId(input.restaurantId);
+    const users = await this.users.find({
+      restaurantId: rid,
+      active: true,
+      $and: [
+        { $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] },
+        {
+          $or: [
+            { role: Role.RESTAURANT_ADMIN },
+            { role: Role.EMPLOYEE, employeePosition: { $in: ['CASHIER', 'MANAGER'] } },
+            { role: Role.EMPLOYEE, permissions: { $in: ['TABLES_PAYMENT', 'TABLES_PRINT', 'TABLES_CLOSE'] } },
+          ],
+        },
+      ],
+    }).lean();
+    const total = (Number(input.totalCents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    await this.sendToUsers(users, 'orderStatus', (user) => ({
+      title: `🧾 Conta solicitada · ${input.tableName}`,
+      body: `Total ${total}. A conta já está na fila do caixa para imprimir ou receber.`,
+      tag: `table-bill-${input.restaurantId}-${input.tableName}`,
+      url: user.role === Role.EMPLOYEE ? '/funcionario/mesas' : '/empresa/mesas',
+      kind: 'orderStatus',
+    }), true, false);
   }
 
   async notifyTableOrderReady(input: { waiterId: string; tableName: string; orderNumber?: string }) {

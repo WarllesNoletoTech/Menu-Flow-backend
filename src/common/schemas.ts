@@ -662,6 +662,14 @@ export class RestaurantSettings {
   @Prop({ default: 10, min: 0, max: 100 }) serviceFeePercent!: number;
   @Prop({ default: false }) qrOrderingEnabled!: boolean;
   @Prop({ default: true }) qrRequireWaiterApproval!: boolean;
+  @Prop({ default: false }) printerEnabled!: boolean;
+  @Prop({ default: true }) printerAutoKitchen!: boolean;
+  @Prop({ default: false }) printerAutoBill!: boolean;
+  @Prop({ enum: [58, 80], default: 80 }) printerPaperWidth!: 58 | 80;
+  @Prop({ trim: true, select: false, index: true, sparse: true, unique: true }) printerTokenHash?: string;
+  @Prop({ trim: true }) printerTokenLast4?: string;
+  @Prop() printerLastSeenAt?: Date;
+  @Prop({ trim: true }) printerDeviceName?: string;
 }
 export const RestaurantSettingsSchema =
   SchemaFactory.createForClass(RestaurantSettings);
@@ -724,3 +732,28 @@ export class TableEvent {
 }
 export const TableEventSchema = SchemaFactory.createForClass(TableEvent);
 TableEventSchema.index({ tableSessionId: 1, createdAt: -1 });
+
+export type PrintJobStatus = "PENDING" | "CLAIMED" | "PRINTED" | "FAILED";
+export type PrintJobRole = "KITCHEN" | "CASHIER" | "BAR";
+@Schema({ timestamps: true })
+export class PrintJob {
+  @Prop({ type: Types.ObjectId, ref: "Restaurant", required: true, index: true }) restaurantId!: Types.ObjectId;
+  @Prop({ enum: ["KITCHEN", "CASHIER", "BAR"], required: true, index: true }) printerRole!: PrintJobRole;
+  @Prop({ required: true, trim: true }) type!: string;
+  @Prop({ enum: ["PENDING", "CLAIMED", "PRINTED", "FAILED"], default: "PENDING", index: true }) status!: PrintJobStatus;
+  @Prop({ type: Object, default: {} }) payload!: Record<string, unknown>;
+  @Prop({ required: true }) content!: string;
+  @Prop({ min: 1, max: 5, default: 1 }) copies!: number;
+  @Prop({ min: 0, default: 0 }) attempts!: number;
+  @Prop({ trim: true }) sourceKey?: string;
+  @Prop({ trim: true }) claimedBy?: string;
+  @Prop() claimedAt?: Date;
+  @Prop() leaseUntil?: Date;
+  @Prop() printedAt?: Date;
+  @Prop() failedAt?: Date;
+  @Prop({ trim: true, maxlength: 1000 }) error?: string;
+}
+export const PrintJobSchema = SchemaFactory.createForClass(PrintJob);
+PrintJobSchema.index({ restaurantId: 1, status: 1, printerRole: 1, createdAt: 1 });
+PrintJobSchema.index({ sourceKey: 1 }, { unique: true, sparse: true });
+PrintJobSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });

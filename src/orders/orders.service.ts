@@ -585,8 +585,9 @@ export class OrdersService {
           rappidexSyncAttempts: 0,
           rappidexReleaseRequested: false,
           rappidexCancelRequested: false,
-          status: "PENDING",
-          statusHistory: [{ status: "PENDING", changedAt: new Date(), changedBy: actor }],
+          status: "PREPARING",
+          preparingAt: new Date(),
+          statusHistory: [{ status: "PREPARING", changedAt: new Date(), changedBy: actor }],
         });
         break;
       } catch (error) {

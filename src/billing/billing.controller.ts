@@ -132,6 +132,12 @@ export class BillingController {
   ) {
     return this.billing.setStatus(id, b.status, r.user.sub);
   }
+  @Delete("invoices/:id") @Roles(Role.SUPER_ADMIN) deleteInvoice(
+    @Param("id") id: string,
+    @Req() r: { user: { sub: string } },
+  ) {
+    return this.billing.deleteInvoice(id, r.user.sub);
+  }
   @Get("me/dashboard")
   @Header("Cache-Control", "no-store, private")
   @Roles(Role.RESTAURANT_ADMIN)

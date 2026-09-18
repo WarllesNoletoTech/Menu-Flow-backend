@@ -1058,6 +1058,33 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     });
     return invoice;
   }
+  async deleteInvoice(id: string, actorId: string) {
+    if (!Types.ObjectId.isValid(id))
+      throw new NotFoundException("Cobrança não encontrada.");
+    const invoice: any = await this.invoices.findById(id).lean();
+    if (!invoice) throw new NotFoundException("Cobrança não encontrada.");
+
+    await this.invoices.deleteOne({ _id: invoice._id });
+    await this.audits.create({
+      actorId,
+      action: "INVOICE_DELETED",
+      targetType: "BillingInvoice",
+      targetId: invoice._id,
+      metadata: {
+        restaurantId: invoice.restaurantId?.toString?.() ?? String(invoice.restaurantId),
+        period: invoice.period,
+        amountCents: invoice.amountCents,
+        revenueCents: invoice.revenueCents,
+        previousStatus: invoice.status,
+      },
+    });
+    return {
+      deleted: true,
+      id: invoice._id,
+      period: invoice.period,
+      restaurantId: invoice.restaurantId,
+    };
+  }
   async dashboard() {
     const now = new Date();
     await this.invoices.updateMany(

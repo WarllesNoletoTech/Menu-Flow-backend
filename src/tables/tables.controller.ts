@@ -39,6 +39,8 @@ class PaymentDto {
 }
 class DiscountDto { @IsInt() @Min(0) discountCents!: number; }
 class CancelTableOrderDto { @IsOptional() @IsString() @MaxLength(500) reason?: string; }
+class ReadyOrderDto { @IsOptional() @IsIn(['KITCHEN','BAR']) sector?: 'KITCHEN'|'BAR'; }
+class SettleDto { @IsIn(['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD']) method!: string; @IsOptional() @IsInt() @Min(1) receivedCents?: number; }
 class TransferDto { @IsMongoId() fromTableId!: string; @IsMongoId() toTableId!: string; }
 class MergeDto { @IsArray() @ArrayMinSize(1) @ArrayMaxSize(20) @IsMongoId({ each: true }) tableIds!: string[]; }
 class WaiterDto { @IsMongoId() waiterId!: string; }
@@ -59,11 +61,12 @@ export class TablesController {
   @Get('sessions/:sessionId') session(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string) { return this.tables.session(req.user, sessionId); }
   @Get('sessions/:sessionId/events') events(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string) { return this.tables.events(req.user, sessionId); }
   @Post('sessions/:sessionId/orders') order(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: CreateTableOrderDto) { return this.tables.addOrder(req.user, sessionId, body.items); }
-  @Patch('sessions/:sessionId/orders/:orderId/ready') readyOrder(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Param('orderId') orderId: string) { return this.tables.markOrderReady(req.user, sessionId, orderId); }
+  @Patch('sessions/:sessionId/orders/:orderId/ready') readyOrder(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Param('orderId') orderId: string, @Body() body: ReadyOrderDto) { return this.tables.markOrderReady(req.user, sessionId, orderId, body.sector); }
   @Patch('sessions/:sessionId/orders/:orderId/delivered') deliverOrder(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Param('orderId') orderId: string) { return this.tables.deliverOrder(req.user, sessionId, orderId); }
   @Patch('sessions/:sessionId/orders/:orderId/cancel') cancelOrder(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Param('orderId') orderId: string, @Body() body: CancelTableOrderDto) { return this.tables.cancelOrder(req.user, sessionId, orderId, body.reason); }
   @Patch('sessions/:sessionId/request-bill') requestBill(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string) { return this.tables.requestBill(req.user, sessionId); }
   @Post('sessions/:sessionId/payments') payment(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: PaymentDto) { return this.tables.addPayment(req.user, sessionId, body); }
+  @Post('sessions/:sessionId/settle') settle(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: SettleDto) { return this.tables.settleAndClose(req.user, sessionId, body); }
   @Patch('sessions/:sessionId/discount') discount(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: DiscountDto) { return this.tables.setDiscount(req.user, sessionId, body.discountCents); }
   @Patch('sessions/:sessionId/waiter') waiter(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: WaiterDto) { return this.tables.changeWaiter(req.user, sessionId, body.waiterId); }
   @Post('sessions/:sessionId/transfer') transfer(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: TransferDto) { return this.tables.transfer(req.user, sessionId, body.fromTableId, body.toTableId); }

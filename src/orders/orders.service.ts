@@ -556,6 +556,8 @@ export class OrdersService {
       (sum, item) => sum + item.quantity * (item.unitPriceCents + item.addons.reduce((n, addon) => n + addon.priceCents, 0)),
       0,
     );
+    const productionSectors = [...new Set(items.map((item: any) => item.productionSector).filter((sector: string) => sector === 'KITCHEN' || sector === 'BAR'))] as Array<'KITCHEN' | 'BAR'>;
+    const hasProduction = productionSectors.length > 0;
     let order;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
@@ -572,6 +574,7 @@ export class OrdersService {
           paymentMethod: "TABLE",
           needsChange: false,
           items,
+          productionStates: productionSectors.map((sector) => ({ sector, status: 'PREPARING' })),
           subtotal: subtotalCents / 100,
           subtotalCents,
           deliveryFee: 0,
@@ -585,9 +588,10 @@ export class OrdersService {
           rappidexSyncAttempts: 0,
           rappidexReleaseRequested: false,
           rappidexCancelRequested: false,
-          status: "PREPARING",
-          preparingAt: new Date(),
-          statusHistory: [{ status: "PREPARING", changedAt: new Date(), changedBy: actor }],
+          status: hasProduction ? "PREPARING" : "READY",
+          preparingAt: hasProduction ? new Date() : undefined,
+          readyAt: hasProduction ? undefined : new Date(),
+          statusHistory: [{ status: hasProduction ? "PREPARING" : "READY", changedAt: new Date(), changedBy: actor }],
         });
         break;
       } catch (error) {
@@ -891,8 +895,10 @@ export class OrdersService {
     }).lean();
     if (products.length !== new Set(productIds).size) throw new BadRequestException("Um ou mais produtos estão indisponíveis.");
     const categoryIds = [...new Set(products.map((p) => p.categoryId.toString()))].map((id) => new Types.ObjectId(id));
-    if ((await this.categories.countDocuments({ _id: { $in: categoryIds }, restaurantId: rid, archivedAt: { $exists: false }, active: true })) !== categoryIds.length)
+    const categories = await this.categories.find({ _id: { $in: categoryIds }, restaurantId: rid, archivedAt: { $exists: false }, active: true }).select('_id name productionSector').lean();
+    if (categories.length !== categoryIds.length)
       throw new BadRequestException("Um produto pertence a uma categoria indisponível.");
+    const sectorByCategory = new Map(categories.map((category: any) => [category._id.toString(), category.productionSector ?? this.guessProductionSector(category.name)]));
     const productById = new Map(products.map((product) => [product._id.toString(), product]));
     return inputItems.map((item) => {
       const product = productById.get(item.productId) as any;
@@ -914,8 +920,12 @@ export class OrdersService {
       }
       const pricedAddons = applyAddonPricing(product.addonGroups as any[], selected);
       const unitPriceCents = cents(product.promotionalPriceCents, product.promotionalPrice ?? product.price);
-      return { productId: product._id, productName: product.name, unitPrice: unitPriceCents / 100, unitPriceCents, quantity: item.quantity, addons: pricedAddons, observation: item.observation?.trim() };
+      return { productId: product._id, productName: product.name, unitPrice: unitPriceCents / 100, unitPriceCents, quantity: item.quantity, addons: pricedAddons, observation: item.observation?.trim(), productionSector: sectorByCategory.get(product.categoryId.toString()) ?? 'KITCHEN' };
     });
+  }
+  private guessProductionSector(name?: string): 'KITCHEN' | 'BAR' {
+    const normalized = String(name ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return /(bebida|refriger|suco|cerveja|drink|vinho|agua|cafe|cha|vitamina|energetico|destilado)/.test(normalized) ? 'BAR' : 'KITCHEN';
   }
   private checkoutResponse(order: any, restaurant: Restaurant) {
     const trackingUrl = `/acompanhar/${encodeURIComponent(order.orderNumber)}?token=${encodeURIComponent(order.publicToken)}`;

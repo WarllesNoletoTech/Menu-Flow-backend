@@ -189,17 +189,45 @@ export class TablesService {
     return this.session(actor, session._id.toString());
   }
 
-  async markOrderReady(actor: TableActor, sessionId: string, orderId: string) {
+  async markOrderReady(actor: TableActor, sessionId: string, orderId: string, sector?: 'KITCHEN' | 'BAR') {
     await this.assertPermission(actor, 'TABLES_KITCHEN');
     const rid = this.rid(actor);
     const session = await this.activeSession(rid, sessionId);
-    const order = await this.orders.findOne({ _id: this.oid(orderId, 'Pedido não encontrado.'), restaurantId: rid, tableSessionId: session._id, fulfillment: 'TABLE' }).lean();
+    const order = await this.orders.findOne({ _id: this.oid(orderId, 'Pedido não encontrado.'), restaurantId: rid, tableSessionId: session._id, fulfillment: 'TABLE' });
     if (!order) throw new NotFoundException('Pedido de mesa não encontrado nesta comanda.');
     if (order.status === 'READY') return this.session(actor, sessionId);
     if (order.status !== 'PREPARING') throw new ConflictException('Somente pedidos em preparo podem ser marcados como prontos.');
-    await this.ordersService.updateStatus(actor.restaurantId, order._id.toString(), 'READY', actor.sub);
-    void this.printer.discardAutoKitchen(order._id.toString()).catch(() => undefined);
-    await this.event(actor, session._id, 'ORDER_READY', order.tableId ?? session.primaryTableId, { orderId: order._id.toString(), orderNumber: order.orderNumber });
+
+    const states = (order.productionStates?.length ? order.productionStates : this.productionStatesFromItems(order.items as any[])).map((state: any) => ({
+      sector: state.sector as 'KITCHEN' | 'BAR',
+      status: state.status as 'PREPARING' | 'READY',
+      readyAt: state.readyAt,
+      readyBy: state.readyBy,
+    }));
+    if (!states.length) states.push({ sector: 'KITCHEN', status: 'PREPARING', readyAt: undefined, readyBy: undefined });
+    const selected = sector ? states.filter((state) => state.sector === sector) : states.filter((state) => state.status !== 'READY');
+    if (!selected.length && sector) throw new ConflictException('Este setor não possui itens neste pedido.');
+    const now = new Date();
+    const actorId = this.oid(actor.sub, 'Responsável inválido.');
+    for (const state of states) {
+      if ((!sector || state.sector === sector) && state.status !== 'READY') {
+        state.status = 'READY';
+        state.readyAt = now;
+        state.readyBy = actorId;
+      }
+    }
+    order.productionStates = states as any;
+    await order.save();
+    if (sector) {
+      void this.printer.discardAutoProduction(order._id.toString(), sector).catch(() => undefined);
+      await this.event(actor, session._id, 'ORDER_SECTOR_READY', order.tableId ?? session.primaryTableId, { orderId: order._id.toString(), orderNumber: order.orderNumber, sector });
+    }
+
+    if (states.every((state) => state.status === 'READY')) {
+      await this.ordersService.updateStatus(actor.restaurantId, order._id.toString(), 'READY', actor.sub);
+      void this.printer.discardAutoKitchen(order._id.toString()).catch(() => undefined);
+      await this.event(actor, session._id, 'ORDER_READY', order.tableId ?? session.primaryTableId, { orderId: order._id.toString(), orderNumber: order.orderNumber });
+    }
     return this.session(actor, sessionId);
   }
 
@@ -259,6 +287,47 @@ export class TablesService {
     fresh.balanceCents = Math.max(0, fresh.totalCents - fresh.paidCents);
     await fresh.save();
     await this.event(actor, fresh._id, 'PAYMENT_ADDED', fresh.primaryTableId, { amountCents: input.amountCents, method: input.method, balanceCents: fresh.balanceCents });
+    return this.session(actor, sessionId);
+  }
+
+  async settleAndClose(actor: TableActor, sessionId: string, input: { method: string; receivedCents?: number }) {
+    await this.assertPermission(actor, 'TABLES_PAYMENT');
+    await this.assertPermission(actor, 'TABLES_CLOSE');
+    const rid = this.rid(actor);
+    const session = await this.activeSession(rid, sessionId);
+    if (session.status !== 'AWAITING_PAYMENT') throw new ConflictException('Solicite a conta antes de fechar a mesa.');
+    await this.recalculate(session._id);
+    const fresh = await this.sessions.findById(session._id);
+    if (!fresh) throw new NotFoundException('Comanda não encontrada.');
+    const activeOrders = await this.orders.find({ restaurantId: rid, tableSessionId: fresh._id, status: { $in: ['PENDING', 'ACCEPTED', 'PREPARING', 'READY'] } }).select('orderNumber status').lean();
+    if (activeOrders.length) throw new ConflictException('Ainda existem pedidos em preparo ou aguardando entrega. Entregue os pedidos antes de fechar a mesa.');
+
+    if (fresh.balanceCents > 0) {
+      const amountCents = fresh.balanceCents;
+      if (input.method === 'CASH' && input.receivedCents != null && input.receivedCents < fresh.balanceCents) throw new BadRequestException('O valor recebido em dinheiro é menor que o saldo da conta.');
+      const changeCents = input.method === 'CASH' && input.receivedCents ? Math.max(0, input.receivedCents - fresh.balanceCents) : 0;
+      fresh.payments = [...(fresh.payments ?? []), {
+        amountCents,
+        method: input.method,
+        recordedBy: this.oid(actor.sub, 'Responsável inválido.'),
+        recordedAt: new Date(),
+        note: changeCents > 0 ? `Recebido ${this.money(input.receivedCents!)} · Troco ${this.money(changeCents)}` : undefined,
+      }];
+      fresh.paidCents = fresh.payments.reduce((sum, payment) => sum + Number(payment.amountCents || 0), 0);
+      fresh.balanceCents = 0;
+      await fresh.save();
+      await this.event(actor, fresh._id, 'PAYMENT_ADDED', fresh.primaryTableId, { amountCents, method: input.method, balanceCents: 0, quickClose: true });
+    }
+
+    const delivered = await this.orders.find({ restaurantId: rid, tableSessionId: fresh._id, status: 'DELIVERED_TO_TABLE' }).select('_id').lean();
+    for (const order of delivered) await this.ordersService.updateStatus(actor.restaurantId, order._id.toString(), 'COMPLETED', actor.sub);
+    void this.printer.discardAutoBill(fresh._id.toString()).catch(() => undefined);
+    fresh.status = 'CLOSED';
+    fresh.active = false;
+    fresh.closedAt = new Date();
+    fresh.closedBy = this.oid(actor.sub, 'Responsável inválido.');
+    await fresh.save();
+    await this.event(actor, fresh._id, 'TABLE_CLOSED', fresh.primaryTableId, { totalCents: fresh.totalCents, paidCents: fresh.paidCents, quickClose: true });
     return this.session(actor, sessionId);
   }
 
@@ -396,7 +465,7 @@ export class TablesService {
       this.settings.findOne({ restaurantId: rid }).select('tableServiceEnabled waiterAppEnabled').lean(),
     ]);
     if (!settings?.tableServiceEnabled || !settings?.waiterAppEnabled) throw new ForbiddenException('O app do garçom não está habilitado para este estabelecimento.');
-    const implied = employee?.employeePosition === 'KITCHEN' && ['TABLES_VIEW','TABLES_KITCHEN','TABLES_PRINT'].includes(permission)
+    const implied = ['KITCHEN','BAR'].includes(employee?.employeePosition ?? '') && ['TABLES_VIEW','TABLES_KITCHEN','TABLES_PRINT'].includes(permission)
       || employee?.employeePosition === 'CASHIER' && ['TABLES_VIEW','TABLES_PAYMENT','TABLES_PRINT','TABLES_CLOSE'].includes(permission);
     if (!employee || (!(employee.permissions ?? []).includes(permission) && !implied)) throw new ForbiddenException('Seu usuário não possui permissão para esta ação no salão.');
   }
@@ -410,6 +479,15 @@ export class TablesService {
     const waiter = await this.users.findOne({ _id: id, restaurantId: rid, role: Role.EMPLOYEE, active: true, deletedAt: null, permissions: 'TABLES_VIEW' }).select('_id employeePosition permissions').lean();
     if (!waiter) throw new NotFoundException('Garçom não encontrado neste estabelecimento.');
     return id;
+  }
+
+  private productionStatesFromItems(items: any[]) {
+    const sectors = [...new Set((items ?? []).map((item) => item.productionSector ?? 'KITCHEN').filter((value) => value === 'KITCHEN' || value === 'BAR'))] as Array<'KITCHEN' | 'BAR'>;
+    return sectors.map((sector) => ({ sector, status: 'PREPARING' as const }));
+  }
+
+  private money(cents: number) {
+    return `R$ ${(Number(cents || 0) / 100).toFixed(2).replace('.', ',')}`;
   }
 
   private event(actor: TableActor, sessionId: Types.ObjectId, action: string, tableId?: Types.ObjectId, metadata: Record<string, unknown> = {}) {

@@ -13,7 +13,7 @@ type AddonGroupInput = {
   addons: Array<{ _id?: string; name: string; price: number }>;
 };
 
-type CategoryInput = { name: string; order?: number; active?: boolean };
+type CategoryInput = { name: string; order?: number; active?: boolean; productionSector?: 'KITCHEN' | 'BAR' | 'NONE' };
 type CategoryUpdateInput = Partial<CategoryInput>;
 type ProductInput = {
   categoryId: string;
@@ -92,6 +92,7 @@ export class CatalogService {
       restaurantId: rid,
       order: input.order ?? await this.categories.countDocuments({ restaurantId: rid }),
       active: input.active ?? true,
+      productionSector: input.productionSector ?? this.guessProductionSector(name),
     });
     return category.toObject();
   }
@@ -108,6 +109,7 @@ export class CatalogService {
     }
     if (input.order !== undefined) changes.order = input.order;
     if (input.active !== undefined) changes.active = input.active;
+    if (input.productionSector !== undefined) changes.productionSector = input.productionSector;
 
     const category = await this.categories.findOneAndUpdate(
       { _id: new Types.ObjectId(id), restaurantId: rid },
@@ -301,6 +303,11 @@ export class CatalogService {
       throw new BadRequestException('Estabelecimento inválido para a operação de catálogo.');
     }
     return new Types.ObjectId(restaurantId);
+  }
+
+  private guessProductionSector(name: string): 'KITCHEN' | 'BAR' {
+    const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+    return /(bebida|refriger|suco|cerveja|drink|vinho|agua|cafe|cha|vitamina|energetico|destilado)/.test(normalized) ? 'BAR' : 'KITCHEN';
   }
 
   private cleanRequiredName(value: string, message: string) {

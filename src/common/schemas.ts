@@ -107,8 +107,8 @@ export class User {
   @Prop() phone?: string;
   @Prop({ match: /^55\d{10,11}$/ }) reportWhatsapp?: string;
   @Prop({ enum: Role, required: true }) role!: Role;
-  @Prop({ enum: ["WAITER", "KITCHEN", "CASHIER", "MANAGER", "OTHER"] })
-  employeePosition?: "WAITER" | "KITCHEN" | "CASHIER" | "MANAGER" | "OTHER";
+  @Prop({ enum: ["WAITER", "KITCHEN", "BAR", "CASHIER", "MANAGER", "OTHER"] })
+  employeePosition?: "WAITER" | "KITCHEN" | "BAR" | "CASHIER" | "MANAGER" | "OTHER";
   @Prop({ type: [String], default: [] }) permissions!: string[];
   @Prop({ type: Types.ObjectId, ref: "Restaurant" })
   restaurantId?: Types.ObjectId;
@@ -194,6 +194,7 @@ export class Category {
   @Prop({ required: true }) name!: string;
   @Prop({ default: 0 }) order!: number;
   @Prop({ default: true }) active!: boolean;
+  @Prop({ enum: ["KITCHEN", "BAR", "NONE"], default: "KITCHEN" }) productionSector!: "KITCHEN" | "BAR" | "NONE";
   @Prop() archivedAt?: Date;
 }
 export const CategorySchema = SchemaFactory.createForClass(Category);
@@ -261,7 +262,18 @@ export class OrderItem {
     priceCents: number;
   }>;
   @Prop() observation?: string;
+  @Prop({ enum: ["KITCHEN", "BAR", "NONE"], default: "KITCHEN" }) productionSector!: "KITCHEN" | "BAR" | "NONE";
 }
+
+@Schema({ _id: false })
+export class OrderProductionState {
+  @Prop({ enum: ["KITCHEN", "BAR"], required: true }) sector!: "KITCHEN" | "BAR";
+  @Prop({ enum: ["PREPARING", "READY"], default: "PREPARING" }) status!: "PREPARING" | "READY";
+  @Prop() readyAt?: Date;
+  @Prop({ type: Types.ObjectId, ref: "User" }) readyBy?: Types.ObjectId;
+}
+export const OrderProductionStateSchema = SchemaFactory.createForClass(OrderProductionState);
+
 @Schema({ timestamps: true })
 export class Order {
   @Prop({
@@ -289,6 +301,7 @@ export class Order {
   @Prop({ min: 0 }) changeForCents?: number;
   @Prop({ min: 0 }) expectedChangeCents?: number;
   @Prop({ type: [OrderItem], required: true }) items!: OrderItem[];
+  @Prop({ type: [OrderProductionStateSchema], default: [] }) productionStates!: OrderProductionState[];
   @Prop({ required: true }) subtotal!: number;
   @Prop({ required: true, min: 0 }) subtotalCents!: number;
   @Prop({ default: 0 }) deliveryFee!: number;

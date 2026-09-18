@@ -51,7 +51,7 @@ class PaymentMethodDto { @IsIn(['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD']) met
 class BusinessPeriodDto { @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) openTime!: string; @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) closeTime!: string; }
 class BusinessDayDto { @IsInt() @Min(0) @Max(6) dayOfWeek!: number; @IsBoolean() isOpen!: boolean; @IsArray() @ArrayMaxSize(12) @ValidateNested({ each: true }) @Type(() => BusinessPeriodDto) periods!: BusinessPeriodDto[]; }
 class BusinessHoursDto { @IsArray() @ArrayMinSize(7) @ArrayMaxSize(7) @ValidateNested({ each: true }) @Type(() => BusinessDayDto) days!: BusinessDayDto[]; }
-class EmployeeDto { @IsString() @MinLength(1) name!: string; @IsEmail() email!: string; @IsOptional() @IsString() phone?: string; @IsString() @MinLength(8) password!: string; @IsOptional() @IsIn(['WAITER','KITCHEN','CASHIER','MANAGER','OTHER']) employeePosition?: string; @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true }) permissions?: string[]; }
+class EmployeeDto { @IsString() @MinLength(1) name!: string; @IsEmail() email!: string; @IsOptional() @IsString() phone?: string; @IsString() @MinLength(8) password!: string; @IsOptional() @IsIn(['WAITER','KITCHEN','BAR','CASHIER','MANAGER','OTHER']) employeePosition?: string; @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true }) permissions?: string[]; }
 class OwnerDto extends EmployeeDto { @IsString() @MinLength(10) reportWhatsapp!: string; }
 class UpdateStoreUserDto {
   @IsOptional() @IsString() @MinLength(1) name?: string;
@@ -60,7 +60,7 @@ class UpdateStoreUserDto {
   @IsOptional() @IsString() reportWhatsapp?: string;
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsString() @MinLength(8) password?: string;
-  @IsOptional() @IsIn(['WAITER','KITCHEN','CASHIER','MANAGER','OTHER']) employeePosition?: string;
+  @IsOptional() @IsIn(['WAITER','KITCHEN','BAR','CASHIER','MANAGER','OTHER']) employeePosition?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true }) permissions?: string[];
 }
 class EstablishmentWithOwnerDto { @ValidateNested() @Type(() => CreateRestaurantDto) establishment!: CreateRestaurantDto; @ValidateNested() @Type(() => OwnerDto) owner!: OwnerDto; }

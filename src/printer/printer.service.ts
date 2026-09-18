@@ -51,7 +51,23 @@ export class PrinterService {
 
   async queueOrderForActor(actor: PrinterActor, orderId: string) {
     await this.assertPrint(actor);
-    return this.queueKitchenOrder(actor.restaurantId, orderId, false);
+    return this.queueProductionOrder(actor.restaurantId, orderId, false);
+  }
+
+  async queueOrderSectorForActor(actor: PrinterActor, orderId: string, sectorValue: string) {
+    await this.assertPrint(actor);
+    const sector = sectorValue.toUpperCase();
+    if (sector !== 'KITCHEN' && sector !== 'BAR') throw new BadRequestException('Setor de impressão inválido.');
+    const rid = this.rid(actor);
+    const setting = await this.settings.findOne({ restaurantId: rid }).lean();
+    if (!setting?.printerEnabled) return { queued: false, reason: 'PRINTER_DISABLED' };
+    const order = await this.orders.findOne({ _id: this.oid(orderId, 'Pedido não encontrado.'), restaurantId: rid, fulfillment: 'TABLE' }).lean();
+    if (!order) throw new NotFoundException('Pedido de mesa não encontrado.');
+    const items = (order.items || []).filter((item: any) => (item.productionSector ?? 'KITCHEN') === sector);
+    if (!items.length) return { queued: false, reason: 'NO_PRINTABLE_ITEMS' };
+    const content = await this.productionContent(rid, order, sector, items, setting.printerPaperWidth ?? 80);
+    const job = await this.createJob({ restaurantId: rid, printerRole: sector, type: sector === 'BAR' ? 'BAR_ORDER' : 'KITCHEN_ORDER', content, payload: { orderId: order._id.toString(), orderNumber: order.orderNumber, tableSessionId: order.tableSessionId?.toString(), sector } });
+    return { queued: true, jobId: job._id.toString(), sector };
   }
 
   async queueBillForActor(actor: PrinterActor, sessionId: string) {
@@ -60,16 +76,35 @@ export class PrinterService {
   }
 
   async queueKitchenOrder(restaurantId: string, orderId: string, automatic = true) {
+    return this.queueProductionOrder(restaurantId, orderId, automatic);
+  }
+
+  async queueProductionOrder(restaurantId: string, orderId: string, automatic = true) {
     const rid = this.oid(restaurantId, 'Estabelecimento inválido.');
     const setting = await this.settings.findOne({ restaurantId: rid }).lean();
-    if (!setting?.printerEnabled) return { queued: false, reason: 'PRINTER_DISABLED' };
-    if (automatic && !setting.printerAutoKitchen) return { queued: false, reason: 'AUTO_DISABLED' };
+    if (!setting?.printerEnabled) return { queued: false, reason: 'PRINTER_DISABLED', jobs: [] };
+    if (automatic && !setting.printerAutoKitchen) return { queued: false, reason: 'AUTO_DISABLED', jobs: [] };
     const order = await this.orders.findOne({ _id: this.oid(orderId, 'Pedido não encontrado.'), restaurantId: rid, fulfillment: 'TABLE' }).lean();
     if (!order) throw new NotFoundException('Pedido de mesa não encontrado.');
-    const content = await this.kitchenContent(rid, order, setting.printerPaperWidth ?? 80);
-    const sourceKey = automatic ? `AUTO:KITCHEN:${order._id.toString()}` : undefined;
-    const job = await this.createJob({ restaurantId: rid, printerRole: 'KITCHEN', type: 'KITCHEN_ORDER', content, sourceKey, payload: { orderId: order._id.toString(), orderNumber: order.orderNumber, tableSessionId: order.tableSessionId?.toString() } });
-    return { queued: true, jobId: job._id.toString() };
+
+    const sectors: Array<'KITCHEN' | 'BAR'> = ['KITCHEN', 'BAR'];
+    const jobs: Array<{ sector: 'KITCHEN' | 'BAR'; jobId: string }> = [];
+    for (const sector of sectors) {
+      const items = (order.items || []).filter((item: any) => (item.productionSector ?? 'KITCHEN') === sector);
+      if (!items.length) continue;
+      const content = await this.productionContent(rid, order, sector, items, setting.printerPaperWidth ?? 80);
+      const sourceKey = automatic ? `AUTO:PRODUCTION:${order._id.toString()}:${sector}` : undefined;
+      const job = await this.createJob({
+        restaurantId: rid,
+        printerRole: sector,
+        type: sector === 'BAR' ? 'BAR_ORDER' : 'KITCHEN_ORDER',
+        content,
+        sourceKey,
+        payload: { orderId: order._id.toString(), orderNumber: order.orderNumber, tableSessionId: order.tableSessionId?.toString(), sector },
+      });
+      jobs.push({ sector, jobId: job._id.toString() });
+    }
+    return jobs.length ? { queued: true, jobs } : { queued: false, reason: 'NO_PRINTABLE_ITEMS', jobs: [] };
   }
 
   async queueBill(restaurantId: string, sessionId: string, automatic = true) {
@@ -91,9 +126,16 @@ export class PrinterService {
   }
 
   async discardAutoKitchen(orderId: string) {
+    return this.discardAutoProduction(orderId);
+  }
+
+  async discardAutoProduction(orderId: string, sector?: 'KITCHEN' | 'BAR') {
+    const keys = sector
+      ? [`AUTO:PRODUCTION:${orderId}:${sector}`]
+      : [`AUTO:PRODUCTION:${orderId}:KITCHEN`, `AUTO:PRODUCTION:${orderId}:BAR`, `AUTO:KITCHEN:${orderId}`];
     await this.jobs.updateMany(
-      { sourceKey: `AUTO:KITCHEN:${orderId}`, status: 'PENDING' },
-      { $set: { status: 'FAILED', failedAt: new Date(), error: 'Pedido avançou antes da impressão automática; trabalho descartado para evitar impressão atrasada.' } },
+      { sourceKey: { $in: keys }, status: 'PENDING' },
+      { $set: { status: 'FAILED', failedAt: new Date(), error: 'Setor avançou antes da impressão automática; trabalho descartado para evitar impressão atrasada.' } },
     );
   }
 
@@ -106,7 +148,7 @@ export class PrinterService {
 
   async claim(token: string | undefined, input: { deviceId: string; deviceName?: string; roles?: PrinterRole[] }) {
     const setting = await this.authenticateAgent(token);
-    const roles = (input.roles?.length ? input.roles : ['KITCHEN', 'CASHIER']) as PrinterRole[];
+    const roles = (input.roles?.length ? input.roles : ['KITCHEN', 'BAR', 'CASHIER']) as PrinterRole[];
     const now = new Date();
     const leaseUntil = new Date(now.getTime() + 45_000);
     const job = await this.jobs.findOneAndUpdate(
@@ -173,7 +215,7 @@ export class PrinterService {
     }
   }
 
-  private async kitchenContent(rid: Types.ObjectId, order: any, paper: 58 | 80) {
+  private async productionContent(rid: Types.ObjectId, order: any, sector: 'KITCHEN' | 'BAR', items: any[], paper: 58 | 80) {
     const [restaurant, waiter, table] = await Promise.all([
       this.restaurants.findById(rid).select('name tradeName').lean(),
       order.waiterId ? this.users.findById(order.waiterId).select('name').lean() : null,
@@ -182,17 +224,17 @@ export class PrinterService {
     const w = paper === 58 ? 32 : 48;
     const lines: string[] = [];
     lines.push(this.center(restaurant?.tradeName || restaurant?.name || 'MENU FLOW', w));
-    lines.push(this.center('PEDIDO - COZINHA', w), this.hr(w));
+    lines.push(this.center(sector === 'BAR' ? 'PEDIDO - BAR' : 'PEDIDO - COZINHA', w), this.hr(w));
     lines.push(`${table?.name || order.customerName || 'MESA'}   ${order.orderNumber || ''}`.trim());
     if (waiter?.name) lines.push(`Garcom: ${waiter.name}`);
     lines.push(`Hora: ${new Date(order.createdAt || Date.now()).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
     lines.push(this.hr(w));
-    for (const item of order.items || []) {
+    for (const item of items) {
       lines.push(...this.wrap(`${item.quantity}x ${item.productName}`, w));
       for (const addon of item.addons || []) lines.push(...this.wrap(`  + ${addon.name}`, w));
       if (item.observation) lines.push(...this.wrap(`  OBS: ${String(item.observation).toUpperCase()}`, w));
     }
-    lines.push(this.hr(w), this.center('MENU FLOW', w), '', '');
+    lines.push(this.hr(w), this.center(sector === 'BAR' ? 'BAR' : 'COZINHA', w), '', '');
     return lines.join('\n');
   }
 
@@ -255,8 +297,8 @@ export class PrinterService {
   private rid(actor: PrinterActor) { return this.oid(actor.restaurantId, 'Estabelecimento inválido.'); }
   private oid(value: string, message: string) { if (!Types.ObjectId.isValid(value)) throw new BadRequestException(message); return new Types.ObjectId(value); }
   private assertOwner(actor: PrinterActor) { if (actor.role !== Role.RESTAURANT_ADMIN) throw new ForbiddenException('Somente o lojista pode alterar as configurações do Menu Flow Printer.'); }
-  private async assertView(actor: PrinterActor) { if (actor.role === Role.RESTAURANT_ADMIN) return; const employee = await this.users.findOne({ _id: this.oid(actor.sub, 'Usuário inválido.'), restaurantId: this.rid(actor), role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(); const implied = ['KITCHEN','CASHIER'].includes(employee?.employeePosition ?? ''); if (!employee || (!(employee.permissions ?? []).includes('TABLES_VIEW') && !implied)) throw new ForbiddenException('Sem acesso à operação do salão.'); }
-  private async assertPrint(actor: PrinterActor) { if (actor.role === Role.RESTAURANT_ADMIN) return; const employee = await this.users.findOne({ _id: this.oid(actor.sub, 'Usuário inválido.'), restaurantId: this.rid(actor), role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(); const implied = ['KITCHEN','CASHIER'].includes(employee?.employeePosition ?? ''); if (!employee || (!(employee.permissions ?? []).includes('TABLES_PRINT') && !implied)) throw new ForbiddenException('Seu usuário não possui permissão para imprimir.'); }
+  private async assertView(actor: PrinterActor) { if (actor.role === Role.RESTAURANT_ADMIN) return; const employee = await this.users.findOne({ _id: this.oid(actor.sub, 'Usuário inválido.'), restaurantId: this.rid(actor), role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(); const implied = ['KITCHEN','BAR','CASHIER'].includes(employee?.employeePosition ?? ''); if (!employee || (!(employee.permissions ?? []).includes('TABLES_VIEW') && !implied)) throw new ForbiddenException('Sem acesso à operação do salão.'); }
+  private async assertPrint(actor: PrinterActor) { if (actor.role === Role.RESTAURANT_ADMIN) return; const employee = await this.users.findOne({ _id: this.oid(actor.sub, 'Usuário inválido.'), restaurantId: this.rid(actor), role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(); const implied = ['KITCHEN','BAR','CASHIER'].includes(employee?.employeePosition ?? ''); if (!employee || (!(employee.permissions ?? []).includes('TABLES_PRINT') && !implied)) throw new ForbiddenException('Seu usuário não possui permissão para imprimir.'); }
   private money(cents: number) { return `R$ ${(Number(cents || 0) / 100).toFixed(2).replace('.', ',')}`; }
   private hr(w: number) { return '-'.repeat(w); }
   private center(value: string, w: number) { const clean = value.slice(0, w); const left = Math.max(0, Math.floor((w - clean.length) / 2)); return `${' '.repeat(left)}${clean}`; }

@@ -32,6 +32,7 @@ export class PrinterController {
   @Patch('settings') update(@Req() req: RequestWithActor, @Body() body: PrinterSettingsDto) { return this.printer.updateSettings(req.user, body); }
   @Post('token') token(@Req() req: RequestWithActor) { return this.printer.rotateToken(req.user); }
   @Post('jobs/order/:orderId') order(@Req() req: RequestWithActor, @Param('orderId') orderId: string) { return this.printer.queueOrderForActor(req.user, orderId); }
+  @Post('jobs/order/:orderId/:sector') orderSector(@Req() req: RequestWithActor, @Param('orderId') orderId: string, @Param('sector') sector: string) { return this.printer.queueOrderSectorForActor(req.user, orderId, sector); }
   @Post('jobs/bill/:sessionId') bill(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string) { return this.printer.queueBillForActor(req.user, sessionId); }
   @Get('jobs/recent') recent(@Req() req: RequestWithActor) { return this.printer.recent(req.user); }
 }

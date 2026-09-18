@@ -43,6 +43,7 @@ class CreateCategoryDto {
   @IsString() @IsNotEmpty() @MaxLength(80) name!: string;
   @IsOptional() @IsNumber() @Min(0) order?: number;
   @IsOptional() @IsBoolean() active?: boolean;
+  @IsOptional() @IsIn(['KITCHEN', 'BAR', 'NONE']) productionSector?: 'KITCHEN' | 'BAR' | 'NONE';
 }
 class UpdateCategoryDto extends PartialType(CreateCategoryDto) {}
 

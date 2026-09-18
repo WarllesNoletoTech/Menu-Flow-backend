@@ -401,6 +401,43 @@ export class TablesService {
     return this.session(actor, sessionId);
   }
 
+
+  async setServiceFee(actor: TableActor, sessionId: string, enabled: boolean) {
+    await this.assertPermission(actor, 'TABLES_PAYMENT');
+    const rid = this.rid(actor);
+    const session = await this.activeSession(rid, sessionId);
+    await this.recalculate(session._id);
+    const fresh = await this.sessions.findById(session._id);
+    if (!fresh) throw new NotFoundException('Comanda não encontrada.');
+
+    const settings = await this.settings.findOne({ restaurantId: rid }).select('serviceFeePercent').lean();
+    const configuredPercent = Math.max(0, Number(settings?.serviceFeePercent ?? 10));
+    const nextPercent = enabled ? configuredPercent : 0;
+    const nextServiceFeeCents = Math.round(Number(fresh.subtotalCents || 0) * nextPercent / 100);
+    const nextBeforeDiscount = Number(fresh.subtotalCents || 0) + nextServiceFeeCents;
+    const nextDiscount = Math.min(Math.max(0, Number(fresh.discountCents || 0)), nextBeforeDiscount);
+    const nextTotalCents = nextBeforeDiscount - nextDiscount;
+    const paidCents = (fresh.payments ?? []).reduce((sum, payment) => sum + Number(payment.amountCents || 0), 0);
+
+    if (!enabled && paidCents > nextTotalCents) {
+      throw new ConflictException('Não é possível remover a taxa de serviço porque o valor já pago ficaria maior que o novo total da conta. Ajuste os pagamentos antes.');
+    }
+
+    const previousPercent = Number(fresh.serviceFeePercent || 0);
+    fresh.serviceFeePercent = nextPercent;
+    await fresh.save();
+    await this.recalculate(fresh._id);
+    const updated = await this.sessions.findById(fresh._id).lean();
+    await this.event(actor, fresh._id, 'SERVICE_FEE_CHANGED', fresh.primaryTableId, {
+      enabled,
+      previousPercent,
+      serviceFeePercent: nextPercent,
+      serviceFeeCents: updated?.serviceFeeCents ?? 0,
+      totalCents: updated?.totalCents ?? 0,
+    });
+    return this.session(actor, sessionId);
+  }
+
   async changeWaiter(actor: TableActor, sessionId: string, waiterId: string) {
     await this.assertPermission(actor, 'TABLES_TRANSFER');
     const rid = this.rid(actor);

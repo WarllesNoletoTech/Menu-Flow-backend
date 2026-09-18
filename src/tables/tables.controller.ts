@@ -38,6 +38,7 @@ class PaymentDto {
   @IsOptional() @IsString() @MaxLength(200) note?: string;
 }
 class DiscountDto { @IsInt() @Min(0) discountCents!: number; }
+class ServiceFeeDto { @IsBoolean() enabled!: boolean; }
 class CancelTableOrderDto { @IsOptional() @IsString() @MaxLength(500) reason?: string; }
 class ReadyOrderDto { @IsOptional() @IsIn(['KITCHEN','BAR']) sector?: 'KITCHEN'|'BAR'; }
 class SettleDto { @IsIn(['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD']) method!: string; @IsOptional() @IsInt() @Min(1) receivedCents?: number; }
@@ -68,6 +69,7 @@ export class TablesController {
   @Post('sessions/:sessionId/payments') payment(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: PaymentDto) { return this.tables.addPayment(req.user, sessionId, body); }
   @Post('sessions/:sessionId/settle') settle(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: SettleDto) { return this.tables.settleAndClose(req.user, sessionId, body); }
   @Patch('sessions/:sessionId/discount') discount(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: DiscountDto) { return this.tables.setDiscount(req.user, sessionId, body.discountCents); }
+  @Patch('sessions/:sessionId/service-fee') serviceFee(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: ServiceFeeDto) { return this.tables.setServiceFee(req.user, sessionId, body.enabled); }
   @Patch('sessions/:sessionId/waiter') waiter(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: WaiterDto) { return this.tables.changeWaiter(req.user, sessionId, body.waiterId); }
   @Post('sessions/:sessionId/transfer') transfer(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: TransferDto) { return this.tables.transfer(req.user, sessionId, body.fromTableId, body.toTableId); }
   @Post('sessions/:sessionId/merge') merge(@Req() req: RequestWithActor, @Param('sessionId') sessionId: string, @Body() body: MergeDto) { return this.tables.merge(req.user, sessionId, body.tableIds); }

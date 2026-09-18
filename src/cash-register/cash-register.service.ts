@@ -245,7 +245,7 @@ export class CashRegisterService {
 
   private async receiptContent(rid: Types.ObjectId, shift: any, summary: any, movements: any[], title: string, paper: 58 | 80) {
     const restaurant = await this.restaurants.findById(rid).select('name tradeName').lean();
-    const w = paper === 58 ? 32 : 48;
+    const w = paper === 58 ? 30 : 46;
     const lines = [this.center(restaurant?.tradeName || restaurant?.name || 'MENU FLOW', w), this.center(title, w), this.hr(w)];
     lines.push(`Abertura: ${this.date(shift.openedAt)}`);
     if (shift.openedBy?.name) lines.push(`Aberto por: ${shift.openedBy.name}`);
@@ -271,7 +271,7 @@ export class CashRegisterService {
 
   private async movementReceiptContent(rid: Types.ObjectId, shift: any, movement: any, paper: 58 | 80) {
     const restaurant = await this.restaurants.findById(rid).select('name tradeName').lean();
-    const w = paper === 58 ? 32 : 48;
+    const w = paper === 58 ? 30 : 46;
     const labels: Record<string, string> = { OPENING: 'ABERTURA', SUPPLY: 'SUPRIMENTO', WITHDRAWAL: 'SANGRIA', SALE: 'VENDA' };
     const lines = [this.center(restaurant?.tradeName || restaurant?.name || 'MENU FLOW', w), this.center(`COMPROVANTE - ${labels[movement.type] || movement.type}`, w), this.hr(w)];
     lines.push(`Data: ${this.date(movement.recordedAt)}`);

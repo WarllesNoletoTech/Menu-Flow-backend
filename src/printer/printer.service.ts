@@ -261,7 +261,7 @@ export class PrinterService {
       order.waiterId ? this.users.findById(order.waiterId).select('name').lean() : null,
       order.tableId ? this.tables.findById(order.tableId).select('name').lean() : null,
     ]);
-    const w = paper === 58 ? 32 : 48;
+    const w = paper === 58 ? 30 : 46;
     const lines: string[] = [];
     lines.push(this.center(restaurant?.tradeName || restaurant?.name || 'MENU FLOW', w));
     lines.push(this.center(sector === 'BAR' ? 'PEDIDO - BAR' : 'PEDIDO - COZINHA', w), this.hr(w));
@@ -285,7 +285,7 @@ export class PrinterService {
       this.orders.find({ restaurantId: rid, tableSessionId: session._id, status: { $nin: ['REJECTED', 'CANCELLED'] } }).sort({ createdAt: 1 }).lean(),
       session.waiterId ? this.users.findById(session.waiterId).select('name').lean() : null,
     ]);
-    const w = paper === 58 ? 32 : 48;
+    const w = paper === 58 ? 30 : 46;
     const lines: string[] = [];
     lines.push(this.center(restaurant?.tradeName || restaurant?.name || 'MENU FLOW', w));
     lines.push(this.center('PRE-CONTA', w), this.hr(w));

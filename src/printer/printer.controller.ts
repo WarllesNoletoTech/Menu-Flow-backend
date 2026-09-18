@@ -8,7 +8,12 @@ import { PrinterActor, PrinterService } from './printer.service';
 class PrinterSettingsDto {
   @IsOptional() @IsBoolean() printerEnabled?: boolean;
   @IsOptional() @IsBoolean() printerAutoKitchen?: boolean;
+  @IsOptional() @IsBoolean() printerAutoBar?: boolean;
   @IsOptional() @IsBoolean() printerAutoBill?: boolean;
+  @IsOptional() @IsBoolean() printerAutoCashOpen?: boolean;
+  @IsOptional() @IsBoolean() printerAutoCashSupply?: boolean;
+  @IsOptional() @IsBoolean() printerAutoCashWithdrawal?: boolean;
+  @IsOptional() @IsBoolean() printerAutoCashClose?: boolean;
   @IsOptional() @IsIn([58, 80]) printerPaperWidth?: 58 | 80;
 }
 class ClaimDto {

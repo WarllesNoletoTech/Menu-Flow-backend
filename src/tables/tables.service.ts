@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { randomBytes } from 'crypto';
 import { Model, Types } from 'mongoose';
@@ -14,6 +14,7 @@ export type TableActor = { sub: string; role: Role; restaurantId: string };
 
 @Injectable()
 export class TablesService {
+  private readonly logger = new Logger(TablesService.name);
   constructor(
     @InjectModel(RestaurantTable.name) private readonly tables: Model<RestaurantTable>,
     @InjectModel(TableSession.name) private readonly sessions: Model<TableSession>,
@@ -187,7 +188,14 @@ export class TablesService {
     }, actor.sub);
     await this.recalculate(session._id);
     await this.event(actor, session._id, 'ORDER_ADDED', table._id, { orderId: (order as any)._id?.toString(), orderNumber: (order as any).orderNumber, totalCents: (order as any).totalCents });
-    void this.printer.queueKitchenOrder(actor.restaurantId, (order as any)._id.toString(), true).catch(() => undefined);
+    try {
+      const printResult = await this.printer.queueProductionOrder(actor.restaurantId, (order as any)._id.toString(), true);
+      if (!(printResult as any)?.queued && (printResult as any)?.reason && (printResult as any)?.reason !== 'NO_PRINTABLE_ITEMS') {
+        this.logger.warn(`Pedido ${(order as any).orderNumber || (order as any)._id} sem impressão automática: ${(printResult as any).reason}`);
+      }
+    } catch (error) {
+      this.logger.error(`Falha ao enfileirar impressão automática do pedido ${(order as any).orderNumber || (order as any)._id}`, error instanceof Error ? error.stack : String(error));
+    }
     return this.session(actor, session._id.toString());
   }
 
@@ -261,18 +269,29 @@ export class TablesService {
 
   async requestBill(actor: TableActor, sessionId: string) {
     await this.assertPermission(actor, 'TABLES_REQUEST_BILL');
-    const session = await this.activeSession(this.rid(actor), sessionId);
+    const rid = this.rid(actor);
+    const session = await this.activeSession(rid, sessionId);
     if (session.status === 'AWAITING_PAYMENT') return this.session(actor, sessionId);
-    session.status = 'AWAITING_PAYMENT';
-    await session.save();
-    await this.event(actor, session._id, 'BILL_REQUESTED', session.primaryTableId, { totalCents: session.totalCents, balanceCents: session.balanceCents });
-    const primaryTable = await this.tables.findById(session.primaryTableId).select('name').lean();
+    await this.recalculate(session._id);
+    const billableOrders = await this.orders.countDocuments({ restaurantId: rid, tableSessionId: session._id, status: { $nin: ['REJECTED', 'CANCELLED'] } });
+    const fresh = await this.sessions.findById(session._id);
+    if (!fresh) throw new NotFoundException('Comanda não encontrada.');
+    if (billableOrders === 0 || fresh.subtotalCents <= 0) throw new ConflictException('Adicione pelo menos um pedido à mesa antes de solicitar a conta.');
+    fresh.status = 'AWAITING_PAYMENT';
+    await fresh.save();
+    const updatedSession = fresh;
+    await this.event(actor, updatedSession._id, 'BILL_REQUESTED', updatedSession.primaryTableId, { totalCents: updatedSession.totalCents, balanceCents: updatedSession.balanceCents });
+    const primaryTable = await this.tables.findById(updatedSession.primaryTableId).select('name').lean();
     void this.notifications.notifyTableBillRequested({
       restaurantId: actor.restaurantId,
       tableName: primaryTable?.name || 'Mesa',
-      totalCents: session.totalCents,
+      totalCents: updatedSession.totalCents,
     }).catch(() => undefined);
-    void this.printer.queueBill(actor.restaurantId, session._id.toString(), true).catch(() => undefined);
+    try {
+      await this.printer.queueBill(actor.restaurantId, updatedSession._id.toString(), true);
+    } catch (error) {
+      this.logger.error(`Falha ao enfileirar pré-conta automática da mesa ${primaryTable?.name || updatedSession._id}`, error instanceof Error ? error.stack : String(error));
+    }
     return this.session(actor, sessionId);
   }
 

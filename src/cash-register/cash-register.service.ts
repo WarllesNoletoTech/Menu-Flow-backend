@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Role } from '../common/roles';
@@ -10,6 +10,7 @@ type PaymentMethod = 'PIX' | 'CASH' | 'CREDIT_CARD' | 'DEBIT_CARD';
 
 @Injectable()
 export class CashRegisterService {
+  private readonly logger = new Logger(CashRegisterService.name);
   constructor(
     @InjectModel(CashRegisterShift.name) private readonly shifts: Model<CashRegisterShift>,
     @InjectModel(CashMovement.name) private readonly movements: Model<CashMovement>,
@@ -63,7 +64,7 @@ export class CashRegisterService {
       throw error;
     }
 
-    await this.movements.create({
+    const openingMovement = await this.movements.create({
       restaurantId: rid,
       shiftId: shift._id,
       type: 'OPENING',
@@ -77,6 +78,7 @@ export class CashRegisterService {
       sourceKey: `CASH_OPEN:${shift._id.toString()}`,
     });
 
+    await this.autoPrintCash(actor, 'OPEN', openingMovement._id.toString());
     const populated = await this.shifts.findById(shift._id).populate('openedBy', 'name').lean();
     return this.contextForShift(rid, populated as any);
   }
@@ -85,10 +87,11 @@ export class CashRegisterService {
     await this.assertAccess(actor);
     if (input.amountCents <= 0) throw new BadRequestException('Informe um valor de suprimento maior que zero.');
     const shift = await this.openShift(actor);
-    await this.movements.create({
+    const movement = await this.movements.create({
       restaurantId: this.rid(actor), shiftId: shift._id, type: 'SUPPLY', amountCents: input.amountCents, method: 'CASH',
       recordedBy: this.uid(actor), recordedAt: new Date(), note: input.note?.trim() || 'Suprimento de caixa', sourceType: 'MANUAL_SUPPLY',
     });
+    await this.autoPrintCash(actor, 'SUPPLY', movement._id.toString());
     return this.contextForShift(this.rid(actor), shift as any);
   }
 
@@ -98,10 +101,11 @@ export class CashRegisterService {
     const shift = await this.openShift(actor);
     const summary = await this.summaryForShift(shift._id);
     if (input.amountCents > summary.expectedCashCents) throw new BadRequestException('A sangria não pode ser maior que o dinheiro esperado no caixa.');
-    await this.movements.create({
+    const movement = await this.movements.create({
       restaurantId: this.rid(actor), shiftId: shift._id, type: 'WITHDRAWAL', amountCents: input.amountCents, method: 'CASH',
       recordedBy: this.uid(actor), recordedAt: new Date(), note: input.note?.trim() || 'Sangria de caixa', sourceType: 'MANUAL_WITHDRAWAL',
     });
+    await this.autoPrintCash(actor, 'WITHDRAWAL', movement._id.toString());
     return this.contextForShift(this.rid(actor), shift as any);
   }
 
@@ -122,6 +126,7 @@ export class CashRegisterService {
     if (!closed) throw new ConflictException('Este caixa já foi fechado.');
 
     const movements = await this.movements.find({ shiftId: shift._id }).populate('recordedBy', 'name').sort({ recordedAt: -1 }).lean();
+    await this.autoPrintCash(actor, 'CLOSE');
     return { shift: closed, summary: { ...summary, declaredCashCents: declared, differenceCents: difference }, movements };
   }
 
@@ -171,6 +176,19 @@ export class CashRegisterService {
     const paper = await this.printer.paperWidthForActor(actor);
     const content = await this.movementReceiptContent(rid, shift as any, movement as any, paper);
     return this.printer.queueCashierTextForActor(actor, `CASH_${movement.type}`, content, { shiftId: String(movement.shiftId), movementId: String((movement as any)._id), type: movement.type });
+  }
+
+  private async autoPrintCash(actor: CashActor, operation: 'OPEN' | 'SUPPLY' | 'WITHDRAWAL' | 'CLOSE', movementId?: string) {
+    try {
+      const settings = await this.printer.automaticSettings(actor.restaurantId);
+      if (!settings.enabled) return;
+      const allowed = operation === 'OPEN' ? settings.cashOpen : operation === 'SUPPLY' ? settings.cashSupply : operation === 'WITHDRAWAL' ? settings.cashWithdrawal : settings.cashClose;
+      if (!allowed) return;
+      if (operation === 'CLOSE') await this.printCurrent(actor);
+      else if (movementId) await this.printMovement(actor, movementId);
+    } catch (error) {
+      this.logger.error(`Falha na impressão automática da operação de caixa ${operation}`, error instanceof Error ? error.stack : String(error));
+    }
   }
 
   private async contextForShift(rid: Types.ObjectId, shift: any) {

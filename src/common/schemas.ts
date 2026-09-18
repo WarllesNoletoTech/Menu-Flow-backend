@@ -681,7 +681,12 @@ export class RestaurantSettings {
   @Prop({ default: true }) qrRequireWaiterApproval!: boolean;
   @Prop({ default: false }) printerEnabled!: boolean;
   @Prop({ default: true }) printerAutoKitchen!: boolean;
+  @Prop({ default: true }) printerAutoBar!: boolean;
   @Prop({ default: false }) printerAutoBill!: boolean;
+  @Prop({ default: false }) printerAutoCashOpen!: boolean;
+  @Prop({ default: false }) printerAutoCashSupply!: boolean;
+  @Prop({ default: false }) printerAutoCashWithdrawal!: boolean;
+  @Prop({ default: false }) printerAutoCashClose!: boolean;
   @Prop({ enum: [58, 80], default: 80 }) printerPaperWidth!: 58 | 80;
   @Prop({ trim: true, select: false, index: true, sparse: true, unique: true }) printerTokenHash?: string;
   @Prop({ trim: true }) printerTokenLast4?: string;

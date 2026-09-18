@@ -26,7 +26,7 @@ export class PrinterService {
     return this.publicSettings(setting);
   }
 
-  async updateSettings(actor: PrinterActor, input: { printerEnabled?: boolean; printerAutoKitchen?: boolean; printerAutoBill?: boolean; printerPaperWidth?: 58 | 80 }) {
+  async updateSettings(actor: PrinterActor, input: { printerEnabled?: boolean; printerAutoKitchen?: boolean; printerAutoBar?: boolean; printerAutoBill?: boolean; printerAutoCashOpen?: boolean; printerAutoCashSupply?: boolean; printerAutoCashWithdrawal?: boolean; printerAutoCashClose?: boolean; printerPaperWidth?: 58 | 80 }) {
     this.assertOwner(actor);
     const setting = await this.settings.findOneAndUpdate(
       { restaurantId: this.rid(actor) },
@@ -83,15 +83,19 @@ export class PrinterService {
     const rid = this.oid(restaurantId, 'Estabelecimento inválido.');
     const setting = await this.settings.findOne({ restaurantId: rid }).lean();
     if (!setting?.printerEnabled) return { queued: false, reason: 'PRINTER_DISABLED', jobs: [] };
-    if (automatic && !setting.printerAutoKitchen) return { queued: false, reason: 'AUTO_DISABLED', jobs: [] };
     const order = await this.orders.findOne({ _id: this.oid(orderId, 'Pedido não encontrado.'), restaurantId: rid, fulfillment: 'TABLE' }).lean();
     if (!order) throw new NotFoundException('Pedido de mesa não encontrado.');
 
     const sectors: Array<'KITCHEN' | 'BAR'> = ['KITCHEN', 'BAR'];
     const jobs: Array<{ sector: 'KITCHEN' | 'BAR'; jobId: string }> = [];
+    let printableSectors = 0;
+    let disabledSectors = 0;
     for (const sector of sectors) {
       const items = (order.items || []).filter((item: any) => (item.productionSector ?? 'KITCHEN') === sector);
       if (!items.length) continue;
+      printableSectors += 1;
+      const autoEnabled = sector === 'BAR' ? setting.printerAutoBar !== false : setting.printerAutoKitchen !== false;
+      if (automatic && !autoEnabled) { disabledSectors += 1; continue; }
       const content = await this.productionContent(rid, order, sector, items, setting.printerPaperWidth ?? 80);
       const sourceKey = automatic ? `AUTO:PRODUCTION:${order._id.toString()}:${sector}` : undefined;
       const job = await this.createJob({
@@ -104,14 +108,14 @@ export class PrinterService {
       });
       jobs.push({ sector, jobId: job._id.toString() });
     }
-    return jobs.length ? { queued: true, jobs } : { queued: false, reason: 'NO_PRINTABLE_ITEMS', jobs: [] };
+    return jobs.length ? { queued: true, jobs } : { queued: false, reason: printableSectors > 0 && disabledSectors === printableSectors ? 'AUTO_DISABLED' : 'NO_PRINTABLE_ITEMS', jobs: [] };
   }
 
   async queueBill(restaurantId: string, sessionId: string, automatic = true) {
     const rid = this.oid(restaurantId, 'Estabelecimento inválido.');
     const setting = await this.settings.findOne({ restaurantId: rid }).lean();
     if (!setting?.printerEnabled) return { queued: false, reason: 'PRINTER_DISABLED' };
-    if (automatic && !setting.printerAutoBill) return { queued: false, reason: 'AUTO_DISABLED' };
+    if (automatic && setting.printerAutoBill !== true) return { queued: false, reason: 'AUTO_DISABLED' };
     const session = await this.sessions.findOne({ _id: this.oid(sessionId, 'Comanda não encontrada.'), restaurantId: rid }).lean();
     if (!session) throw new NotFoundException('Comanda não encontrada.');
     const content = await this.billContent(rid, session, setting.printerPaperWidth ?? 80);
@@ -133,6 +137,21 @@ export class PrinterService {
       payload,
     });
     return { queued: true, jobId: job._id.toString() };
+  }
+
+  async automaticSettings(restaurantId: string) {
+    const rid = this.oid(restaurantId, 'Estabelecimento inválido.');
+    const setting = await this.settings.findOne({ restaurantId: rid }).lean();
+    return {
+      enabled: setting?.printerEnabled === true,
+      kitchen: setting?.printerAutoKitchen !== false,
+      bar: setting?.printerAutoBar !== false,
+      bill: setting?.printerAutoBill === true,
+      cashOpen: setting?.printerAutoCashOpen === true,
+      cashSupply: setting?.printerAutoCashSupply === true,
+      cashWithdrawal: setting?.printerAutoCashWithdrawal === true,
+      cashClose: setting?.printerAutoCashClose === true,
+    };
   }
 
   async paperWidthForActor(actor: PrinterActor): Promise<58 | 80> {
@@ -297,7 +316,12 @@ export class PrinterService {
     return {
       printerEnabled: setting?.printerEnabled ?? false,
       printerAutoKitchen: setting?.printerAutoKitchen ?? true,
+      printerAutoBar: setting?.printerAutoBar ?? true,
       printerAutoBill: setting?.printerAutoBill ?? false,
+      printerAutoCashOpen: setting?.printerAutoCashOpen ?? false,
+      printerAutoCashSupply: setting?.printerAutoCashSupply ?? false,
+      printerAutoCashWithdrawal: setting?.printerAutoCashWithdrawal ?? false,
+      printerAutoCashClose: setting?.printerAutoCashClose ?? false,
       printerPaperWidth: setting?.printerPaperWidth ?? 80,
       printerTokenLast4: setting?.printerTokenLast4 ?? null,
       printerLastSeenAt: setting?.printerLastSeenAt ?? null,
@@ -318,8 +342,8 @@ export class PrinterService {
   private rid(actor: PrinterActor) { return this.oid(actor.restaurantId, 'Estabelecimento inválido.'); }
   private oid(value: string, message: string) { if (!Types.ObjectId.isValid(value)) throw new BadRequestException(message); return new Types.ObjectId(value); }
   private assertOwner(actor: PrinterActor) { if (actor.role !== Role.RESTAURANT_ADMIN) throw new ForbiddenException('Somente o lojista pode alterar as configurações do Menu Flow Printer.'); }
-  private async assertView(actor: PrinterActor) { if (actor.role === Role.RESTAURANT_ADMIN) return; const employee = await this.users.findOne({ _id: this.oid(actor.sub, 'Usuário inválido.'), restaurantId: this.rid(actor), role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(); const implied = ['KITCHEN','BAR','CASHIER'].includes(employee?.employeePosition ?? ''); if (!employee || (!(employee.permissions ?? []).includes('TABLES_VIEW') && !implied)) throw new ForbiddenException('Sem acesso à operação do salão.'); }
-  private async assertPrint(actor: PrinterActor) { if (actor.role === Role.RESTAURANT_ADMIN) return; const employee = await this.users.findOne({ _id: this.oid(actor.sub, 'Usuário inválido.'), restaurantId: this.rid(actor), role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(); const implied = ['KITCHEN','BAR','CASHIER'].includes(employee?.employeePosition ?? ''); if (!employee || (!(employee.permissions ?? []).includes('TABLES_PRINT') && !implied)) throw new ForbiddenException('Seu usuário não possui permissão para imprimir.'); }
+  private async assertView(actor: PrinterActor) { if (actor.role === Role.RESTAURANT_ADMIN) return; const employee = await this.users.findOne({ _id: this.oid(actor.sub, 'Usuário inválido.'), restaurantId: this.rid(actor), role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(); const implied = ['KITCHEN','BAR','CASHIER','MANAGER'].includes(employee?.employeePosition ?? ''); if (!employee || (!(employee.permissions ?? []).includes('TABLES_VIEW') && !implied)) throw new ForbiddenException('Sem acesso à operação do salão.'); }
+  private async assertPrint(actor: PrinterActor) { if (actor.role === Role.RESTAURANT_ADMIN) return; const employee = await this.users.findOne({ _id: this.oid(actor.sub, 'Usuário inválido.'), restaurantId: this.rid(actor), role: Role.EMPLOYEE, active: true, deletedAt: null }).select('permissions employeePosition').lean(); const implied = ['KITCHEN','BAR','CASHIER','MANAGER'].includes(employee?.employeePosition ?? ''); if (!employee || (!(employee.permissions ?? []).includes('TABLES_PRINT') && !implied)) throw new ForbiddenException('Seu usuário não possui permissão para imprimir.'); }
   private money(cents: number) { return `R$ ${(Number(cents || 0) / 100).toFixed(2).replace('.', ',')}`; }
   private hr(w: number) { return '-'.repeat(w); }
   private center(value: string, w: number) { const clean = value.slice(0, w); const left = Math.max(0, Math.floor((w - clean.length) / 2)); return `${' '.repeat(left)}${clean}`; }

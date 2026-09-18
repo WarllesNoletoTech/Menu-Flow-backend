@@ -156,7 +156,8 @@ export class CashRegisterService {
     const shift = await this.shifts.findOne({ restaurantId: rid }).sort({ openedAt: -1 }).populate('openedBy', 'name').populate('closedBy', 'name').lean();
     if (!shift) throw new NotFoundException('Nenhuma operação de caixa encontrada para imprimir.');
     const context = await this.contextForShift(rid, shift as any);
-    const content = await this.receiptContent(rid, context.shift, context.summary, context.movements, shift.status === 'CLOSED' ? 'FECHAMENTO DE CAIXA' : 'MOVIMENTO DO CAIXA');
+    const paper = await this.printer.paperWidthForActor(actor);
+    const content = await this.receiptContent(rid, context.shift, context.summary, context.movements, shift.status === 'CLOSED' ? 'FECHAMENTO DE CAIXA' : 'MOVIMENTO DO CAIXA', paper);
     return this.printer.queueCashierTextForActor(actor, shift.status === 'CLOSED' ? 'CASH_CLOSE' : 'CASH_SUMMARY', content, { shiftId: String((shift as any)._id), status: shift.status });
   }
 
@@ -167,7 +168,8 @@ export class CashRegisterService {
     if (!movement) throw new NotFoundException('Operação de caixa não encontrada.');
     const shift = await this.shifts.findOne({ _id: movement.shiftId, restaurantId: rid }).populate('openedBy', 'name').lean();
     if (!shift) throw new NotFoundException('Caixa não encontrado.');
-    const content = await this.movementReceiptContent(rid, shift as any, movement as any);
+    const paper = await this.printer.paperWidthForActor(actor);
+    const content = await this.movementReceiptContent(rid, shift as any, movement as any, paper);
     return this.printer.queueCashierTextForActor(actor, `CASH_${movement.type}`, content, { shiftId: String(movement.shiftId), movementId: String((movement as any)._id), type: movement.type });
   }
 
@@ -223,9 +225,9 @@ export class CashRegisterService {
     if (!employee || (!implied && !permitted)) throw new ForbiddenException('Seu usuário não possui acesso às operações do caixa.');
   }
 
-  private async receiptContent(rid: Types.ObjectId, shift: any, summary: any, movements: any[], title: string) {
+  private async receiptContent(rid: Types.ObjectId, shift: any, summary: any, movements: any[], title: string, paper: 58 | 80) {
     const restaurant = await this.restaurants.findById(rid).select('name tradeName').lean();
-    const w = 42;
+    const w = paper === 58 ? 32 : 48;
     const lines = [this.center(restaurant?.tradeName || restaurant?.name || 'MENU FLOW', w), this.center(title, w), this.hr(w)];
     lines.push(`Abertura: ${this.date(shift.openedAt)}`);
     if (shift.openedBy?.name) lines.push(`Aberto por: ${shift.openedBy.name}`);
@@ -249,9 +251,9 @@ export class CashRegisterService {
     return lines.join('\n');
   }
 
-  private async movementReceiptContent(rid: Types.ObjectId, shift: any, movement: any) {
+  private async movementReceiptContent(rid: Types.ObjectId, shift: any, movement: any, paper: 58 | 80) {
     const restaurant = await this.restaurants.findById(rid).select('name tradeName').lean();
-    const w = 42;
+    const w = paper === 58 ? 32 : 48;
     const labels: Record<string, string> = { OPENING: 'ABERTURA', SUPPLY: 'SUPRIMENTO', WITHDRAWAL: 'SANGRIA', SALE: 'VENDA' };
     const lines = [this.center(restaurant?.tradeName || restaurant?.name || 'MENU FLOW', w), this.center(`COMPROVANTE - ${labels[movement.type] || movement.type}`, w), this.hr(w)];
     lines.push(`Data: ${this.date(movement.recordedAt)}`);
@@ -271,6 +273,6 @@ export class CashRegisterService {
   private hr(w: number) { return '-'.repeat(w); }
   private center(value: string, w: number) { const clean = String(value).slice(0, w); return `${' '.repeat(Math.max(0, Math.floor((w - clean.length) / 2)))}${clean}`; }
   private wrap(value: string, w: number) { const words = String(value).trim().split(/\s+/); const lines: string[] = []; let line = ''; for (const word of words) { if (!line) line = word; else if (`${line} ${word}`.length <= w) line += ` ${word}`; else { lines.push(line); line = word; } } if (line) lines.push(line); return lines; }
-  private itemLine(label: string, value: string, w: number) { const space = Math.max(1, w - label.length - value.length); return [`${label}${' '.repeat(space)}${value}`]; }
+  private itemLine(label: string, value: string, w: number) { const maxLabel = Math.max(8, w - value.length - 1); const labels = this.wrap(label, maxLabel); const result = labels.slice(0, -1); const last = labels.at(-1) || ''; result.push(`${last}${' '.repeat(Math.max(1, w - last.length - value.length))}${value}`); return result; }
   private methodLabel(method: string) { return ({ CASH: 'Dinheiro', PIX: 'PIX', CREDIT_CARD: 'Credito', DEBIT_CARD: 'Debito' } as Record<string, string>)[method] || method; }
 }

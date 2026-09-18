@@ -135,6 +135,12 @@ export class PrinterService {
     return { queued: true, jobId: job._id.toString() };
   }
 
+  async paperWidthForActor(actor: PrinterActor): Promise<58 | 80> {
+    await this.assertView(actor);
+    const setting = await this.settings.findOne({ restaurantId: this.rid(actor) }).select('printerPaperWidth').lean();
+    return setting?.printerPaperWidth === 58 ? 58 : 80;
+  }
+
   async recent(actor: PrinterActor) {
     await this.assertView(actor);
     return this.jobs.find({ restaurantId: this.rid(actor) }).sort({ createdAt: -1 }).limit(30).select('printerRole type status attempts error createdAt printedAt').lean();
@@ -187,7 +193,7 @@ export class PrinterService {
       { _id: (setting as any)._id },
       { $set: { printerLastSeenAt: now, printerDeviceName: input.deviceName?.trim() || input.deviceId } },
     );
-    return job ? { job: { id: job._id.toString(), printerRole: job.printerRole, type: job.type, content: job.content, copies: job.copies, attempts: job.attempts } } : { job: null };
+    return job ? { job: { id: job._id.toString(), printerRole: job.printerRole, type: job.type, content: job.content, copies: job.copies, attempts: job.attempts, paperWidth: setting.printerPaperWidth === 58 ? 58 : 80 } } : { job: null };
   }
 
   async acknowledge(token: string | undefined, jobId: string, input: { deviceId: string; success: boolean; error?: string }) {

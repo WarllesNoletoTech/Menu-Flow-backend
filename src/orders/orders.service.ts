@@ -898,7 +898,7 @@ export class OrdersService {
     const categories = await this.categories.find({ _id: { $in: categoryIds }, restaurantId: rid, archivedAt: { $exists: false }, active: true }).select('_id name productionSector').lean();
     if (categories.length !== categoryIds.length)
       throw new BadRequestException("Um produto pertence a uma categoria indisponível.");
-    const sectorByCategory = new Map(categories.map((category: any) => [category._id.toString(), category.productionSector ?? this.guessProductionSector(category.name)]));
+    const sectorByCategory = new Map(categories.map((category: any) => [category._id.toString(), category.productionSector ?? 'KITCHEN']));
     const productById = new Map(products.map((product) => [product._id.toString(), product]));
     return inputItems.map((item) => {
       const product = productById.get(item.productId) as any;
@@ -922,10 +922,6 @@ export class OrdersService {
       const unitPriceCents = cents(product.promotionalPriceCents, product.promotionalPrice ?? product.price);
       return { productId: product._id, productName: product.name, unitPrice: unitPriceCents / 100, unitPriceCents, quantity: item.quantity, addons: pricedAddons, observation: item.observation?.trim(), productionSector: sectorByCategory.get(product.categoryId.toString()) ?? 'KITCHEN' };
     });
-  }
-  private guessProductionSector(name?: string): 'KITCHEN' | 'BAR' {
-    const normalized = String(name ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    return /(bebida|refriger|suco|cerveja|drink|vinho|agua|cafe|cha|vitamina|energetico|destilado)/.test(normalized) ? 'BAR' : 'KITCHEN';
   }
   private checkoutResponse(order: any, restaurant: Restaurant) {
     const trackingUrl = `/acompanhar/${encodeURIComponent(order.orderNumber)}?token=${encodeURIComponent(order.publicToken)}`;

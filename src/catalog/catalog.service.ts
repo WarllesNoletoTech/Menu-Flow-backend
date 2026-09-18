@@ -92,7 +92,7 @@ export class CatalogService {
       restaurantId: rid,
       order: input.order ?? await this.categories.countDocuments({ restaurantId: rid }),
       active: input.active ?? true,
-      productionSector: input.productionSector ?? this.guessProductionSector(name),
+      productionSector: input.productionSector ?? 'KITCHEN',
     });
     return category.toObject();
   }
@@ -303,11 +303,6 @@ export class CatalogService {
       throw new BadRequestException('Estabelecimento inválido para a operação de catálogo.');
     }
     return new Types.ObjectId(restaurantId);
-  }
-
-  private guessProductionSector(name: string): 'KITCHEN' | 'BAR' {
-    const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
-    return /(bebida|refriger|suco|cerveja|drink|vinho|agua|cafe|cha|vitamina|energetico|destilado)/.test(normalized) ? 'BAR' : 'KITCHEN';
   }
 
   private cleanRequiredName(value: string, message: string) {

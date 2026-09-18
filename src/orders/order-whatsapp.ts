@@ -121,8 +121,9 @@ export function buildOrderWhatsAppMessage(
     "",
     `Subtotal: ${money(order.subtotalCents)}`,
     `Taxa de entrega: ${money(order.deliveryFeeCents)}`,
-    `Taxa de serviço Menu Flow: ${money(order.customerServiceFeeCents ?? 0)}`,
   );
+  if ((order.customerServiceFeeCents ?? 0) > 0)
+    lines.push(`Taxa de serviço Menu Flow: ${money(order.customerServiceFeeCents ?? 0)}`);
   if (order.discountCents)
     lines.push(`Desconto: -${money(order.discountCents)}`);
   lines.push(

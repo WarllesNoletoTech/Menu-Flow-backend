@@ -20,6 +20,11 @@ import {
   BillingReportStatus,
   BillingTier,
   Order,
+  TableSession,
+  CashRegisterShift,
+  CashMovement,
+  Product,
+  Category,
   PlatformBillingSettings,
   Restaurant,
   ServiceReportItem,
@@ -61,6 +66,11 @@ export class BillingService {
     @InjectModel(BillingCounter.name) private counters: Model<BillingCounter>,
     @InjectModel(Restaurant.name) private restaurants: Model<Restaurant>,
     @InjectModel(Order.name) private orders: Model<Order>,
+    @InjectModel(TableSession.name) private tableSessions: Model<TableSession>,
+    @InjectModel(CashRegisterShift.name) private cashShifts: Model<CashRegisterShift>,
+    @InjectModel(CashMovement.name) private cashMovements: Model<CashMovement>,
+    @InjectModel(Product.name) private products: Model<Product>,
+    @InjectModel(Category.name) private categories: Model<Category>,
     @InjectModel(AuditLog.name) private audits: Model<AuditLog>,
     private metrics: OrderMetricsService,
     @InjectModel(User.name) private users: Model<User>,
@@ -125,9 +135,10 @@ export class BillingService {
       periodStart,
       periodEnd,
       timezone: restaurant.timezone || DEFAULT_BILLING_TIMEZONE,
-      orderCount: eligible.length,
-      serviceFeeTotalCents: sumOrderServiceFees(eligible),
-      alreadyBilledCount: allOrders.length - eligible.length,
+      // A cobrança por pedido foi desativada: a plataforma cobra apenas mensalidade quando configurada.
+      orderCount: 0,
+      serviceFeeTotalCents: 0,
+      alreadyBilledCount: 0,
       monthlyFeeAlreadyIncluded,
       suggestMonthlyFee: isFirstTuesday(
         chargeDate ? new Date(`${chargeDate}T12:00:00Z`) : new Date(),
@@ -164,7 +175,7 @@ export class BillingService {
     const monthly = input.includeMonthlyFee ? input.monthlyFeeCents! : 0;
     if (!preview.orderCount && !monthly)
       throw new BadRequestException(
-        "Não existem novos pedidos nem mensalidade para cobrar neste relatório.",
+        "Inclua uma mensalidade válida para gerar este relatório.",
       );
     const { restaurant, periodStart, periodEnd } = await this.reportContext(
       input.restaurantId,
@@ -186,10 +197,10 @@ export class BillingService {
           .lean()
       : [];
     const billedIds = new Set(billed.map((item) => item.orderId.toString()));
-    const orders = allOrders.filter(
-      (order) => !billedIds.has((order as any)._id.toString()),
-    );
-    const serviceFeeTotalCents = sumOrderServiceFees(orders);
+    // A taxa por pedido não é mais cobrada. Pedidos antigos continuam preservados no histórico,
+    // mas novos relatórios da plataforma são somente de mensalidade.
+    const orders: any[] = [];
+    const serviceFeeTotalCents = 0;
     const now = new Date(),
       reportNumber = await this.nextReportNumber(now),
       payment = await this.settings.findOne({ key: "global" }).lean();
@@ -873,74 +884,298 @@ export class BillingService {
 
   async merchantSalesReport(restaurantId: string, startDate: string, endDate: string) {
     const rid = this.objectId(restaurantId);
-    const restaurant = await this.restaurants.findById(rid).select("name tradeName cnpj city state timezone").lean();
+    const restaurant = await this.restaurants
+      .findById(rid)
+      .select("name tradeName cnpj city state timezone")
+      .lean();
     if (!restaurant) throw new NotFoundException("Estabelecimento não encontrado.");
-    const timezone = restaurant.timezone || 'America/Sao_Paulo';
+
+    const timezone = restaurant.timezone || "America/Sao_Paulo";
     const { start, end } = zonedDateRange(startDate, endDate, timezone);
-    const [orders, cancelledOrders] = await Promise.all([
-      this.orders.find({ restaurantId: rid, status: 'COMPLETED', completedAt: { $gte: start, $lte: end } })
-        .select('orderNumber completedAt fulfillment paymentMethod items subtotal subtotalCents deliveryFee deliveryFeeCents discount discountCents total totalCents customerServiceFeeCents')
+
+    const [nonTableOrders, tableSessions, cancelled, cashMovements, cashShifts] = await Promise.all([
+      this.orders
+        .find({
+          restaurantId: rid,
+          fulfillment: { $ne: "TABLE" },
+          status: "COMPLETED",
+          completedAt: { $gte: start, $lte: end },
+        })
+        .select("orderNumber completedAt fulfillment paymentMethod items subtotal subtotalCents deliveryFee deliveryFeeCents discount discountCents total totalCents customerServiceFeeCents waiterId tableSessionId")
         .sort({ completedAt: 1 })
         .lean(),
-      this.orders.countDocuments({ restaurantId: rid, $or: [
-        { status: 'REJECTED', rejectedAt: { $gte: start, $lte: end } },
-        { status: 'CANCELLED', cancelledAt: { $gte: start, $lte: end } },
-      ] }),
+      this.tableSessions
+        .find({ restaurantId: rid, status: "CLOSED", closedAt: { $gte: start, $lte: end } })
+        .select("waiterId subtotalCents serviceFeePercent serviceFeeCents discountCents totalCents paidCents payments openedAt closedAt tableIds")
+        .sort({ closedAt: 1 })
+        .lean(),
+      this.orders
+        .find({
+          restaurantId: rid,
+          $or: [
+            { status: "REJECTED", rejectedAt: { $gte: start, $lte: end } },
+            { status: "CANCELLED", cancelledAt: { $gte: start, $lte: end } },
+          ],
+        })
+        .select("orderNumber fulfillment total totalCents customerServiceFeeCents rejectionReason cancellationReason rejectedAt cancelledAt waiterId tableSessionId")
+        .sort({ cancelledAt: -1, rejectedAt: -1 })
+        .lean(),
+      this.cashMovements
+        .find({ restaurantId: rid, recordedAt: { $gte: start, $lte: end } })
+        .select("shiftId type amountCents method recordedBy recordedAt note sourceType sourceId")
+        .sort({ recordedAt: -1 })
+        .lean(),
+      this.cashShifts
+        .find({
+          restaurantId: rid,
+          openedAt: { $lte: end },
+          $or: [{ closedAt: { $gte: start } }, { status: "OPEN" }],
+        })
+        .select("status openedBy openingAmountCents openedAt closedBy closedAt declaredCashCents expectedCashCents differenceCents note")
+        .sort({ openedAt: -1 })
+        .lean(),
     ]);
 
+    const sessionIds = (tableSessions as any[]).map((session) => session._id);
+    const tableOrders = sessionIds.length
+      ? await this.orders
+          .find({ restaurantId: rid, tableSessionId: { $in: sessionIds }, status: "COMPLETED" })
+          .select("orderNumber completedAt fulfillment paymentMethod items subtotal subtotalCents deliveryFee deliveryFeeCents discount discountCents total totalCents customerServiceFeeCents waiterId tableSessionId")
+          .sort({ completedAt: 1 })
+          .lean()
+      : [];
+
+    const saleOrders = [...(nonTableOrders as any[]), ...(tableOrders as any[])];
+    const productIds = Array.from(
+      new Set(
+        saleOrders.flatMap((order) =>
+          (order.items ?? [])
+            .map((item: any) => item.productId?.toString?.())
+            .filter(Boolean),
+        ),
+      ),
+    );
+    const productCatalog = productIds.length
+      ? await this.products
+          .find({ _id: { $in: productIds.map((id) => new Types.ObjectId(id)) }, restaurantId: rid })
+          .select("categoryId name")
+          .lean()
+      : [];
+    const categoryIds = Array.from(new Set((productCatalog as any[]).map((item) => item.categoryId?.toString()).filter(Boolean)));
+    const categories = categoryIds.length
+      ? await this.categories
+          .find({ _id: { $in: categoryIds.map((id) => new Types.ObjectId(id)) }, restaurantId: rid })
+          .select("name")
+          .lean()
+      : [];
+    const productCategory = new Map((productCatalog as any[]).map((item) => [item._id.toString(), item.categoryId?.toString()]));
+    const categoryName = new Map((categories as any[]).map((item) => [item._id.toString(), item.name]));
+
+    const userIds = new Set<string>();
+    for (const session of tableSessions as any[]) if (session.waiterId) userIds.add(session.waiterId.toString());
+    for (const shift of cashShifts as any[]) {
+      if (shift.openedBy) userIds.add(shift.openedBy.toString());
+      if (shift.closedBy) userIds.add(shift.closedBy.toString());
+    }
+    for (const movement of cashMovements as any[]) if (movement.recordedBy) userIds.add(movement.recordedBy.toString());
+    const reportUsers = userIds.size
+      ? await this.users.find({ _id: { $in: [...userIds].map((id) => new Types.ObjectId(id)) } }).select("name employeePosition").lean()
+      : [];
+    const userName = new Map((reportUsers as any[]).map((item) => [item._id.toString(), item.name || "Funcionário"]));
+
     const productMap = new Map<string, { productName: string; quantity: number; productRevenueCents: number }>();
-    const paymentMap = new Map<string, { method: string; orders: number; salesCents: number }>();
+    const categoryMap = new Map<string, { categoryName: string; quantity: number; salesCents: number }>();
+    const paymentMap = new Map<string, { method: string; transactions: number; salesCents: number }>();
     const fulfillmentMap = new Map<string, { fulfillment: string; orders: number; salesCents: number }>();
     const dailyMap = new Map<string, { date: string; orders: number; salesCents: number }>();
+    const hourlyMap = new Map<number, { hour: number; orders: number; salesCents: number }>();
+    const waiterMap = new Map<string, { waiterId: string; waiterName: string; tables: number; orders: number; subtotalCents: number; serviceFeeCents: number; discountCents: number; salesCents: number }>();
+
+    const cents = (modern: number | undefined, legacy: number | undefined) => modern ?? Math.round((legacy ?? 0) * 100);
+    const dateFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" });
+    const hourFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: timezone, hour: "2-digit", hourCycle: "h23" });
+    const dayKey = (value: Date | string) => {
+      const parts = Object.fromEntries(dateFormatter.formatToParts(new Date(value)).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    };
+    const addTimeBucket = (value: Date | string, amountCents: number) => {
+      const day = dayKey(value);
+      const daily = dailyMap.get(day) ?? { date: day, orders: 0, salesCents: 0 };
+      daily.orders += 1;
+      daily.salesCents += amountCents;
+      dailyMap.set(day, daily);
+      const hour = Number(hourFormatter.format(new Date(value)).replace(/\D/g, "")) || 0;
+      const hourly = hourlyMap.get(hour) ?? { hour, orders: 0, salesCents: 0 };
+      hourly.orders += 1;
+      hourly.salesCents += amountCents;
+      hourlyMap.set(hour, hourly);
+    };
+    const addPayment = (method: string, amountCents: number) => {
+      const key = method || "OTHER";
+      const payment = paymentMap.get(key) ?? { method: key, transactions: 0, salesCents: 0 };
+      payment.transactions += 1;
+      payment.salesCents += amountCents;
+      paymentMap.set(key, payment);
+    };
+
     let subtotalCents = 0;
     let deliveryFeesCents = 0;
     let discountsCents = 0;
-    let serviceFeesCents = 0;
-    let grossOrderVolumeCents = 0;
+    let legacyMenuFlowFeesCents = 0;
+    let grossRevenueCents = 0;
+    let serviceFeeTotalCents = 0;
 
-    const cents = (modern: number | undefined, legacy: number | undefined) => modern ?? Math.round((legacy ?? 0) * 100);
-    const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
-    for (const order of orders as any[]) {
+    for (const order of nonTableOrders as any[]) {
       const orderTotalCents = cents(order.totalCents, order.total);
-      const serviceFeeCents = order.customerServiceFeeCents ?? 0;
-      const merchantSalesCents = orderTotalCents - serviceFeeCents;
+      const legacyFeeCents = order.customerServiceFeeCents ?? 0;
+      const merchantSalesCents = Math.max(0, orderTotalCents - legacyFeeCents);
       subtotalCents += cents(order.subtotalCents, order.subtotal);
       deliveryFeesCents += cents(order.deliveryFeeCents, order.deliveryFee);
       discountsCents += cents(order.discountCents, order.discount);
-      serviceFeesCents += serviceFeeCents;
-      grossOrderVolumeCents += orderTotalCents;
-
-      for (const item of order.items ?? []) {
-        const unitPriceCents = cents(item.unitPriceCents, item.unitPrice);
-        const addonCents = (item.addons ?? []).reduce((sum: number, addon: any) => sum + cents(addon.priceCents, addon.price), 0);
-        const productRevenueCents = Math.max(0, item.quantity ?? 0) * (unitPriceCents + addonCents);
-        const key = item.productId?.toString?.() || item.productName;
-        const current = productMap.get(key) ?? { productName: item.productName || 'Produto', quantity: 0, productRevenueCents: 0 };
-        current.quantity += Math.max(0, item.quantity ?? 0);
-        current.productRevenueCents += productRevenueCents;
-        productMap.set(key, current);
-      }
-
-      const payment = paymentMap.get(order.paymentMethod) ?? { method: order.paymentMethod, orders: 0, salesCents: 0 };
-      payment.orders += 1;
-      payment.salesCents += merchantSalesCents;
-      paymentMap.set(order.paymentMethod, payment);
-
+      legacyMenuFlowFeesCents += legacyFeeCents;
+      grossRevenueCents += merchantSalesCents;
+      addPayment(order.paymentMethod, merchantSalesCents);
       const fulfillment = fulfillmentMap.get(order.fulfillment) ?? { fulfillment: order.fulfillment, orders: 0, salesCents: 0 };
       fulfillment.orders += 1;
       fulfillment.salesCents += merchantSalesCents;
       fulfillmentMap.set(order.fulfillment, fulfillment);
-
-      const dayParts = Object.fromEntries(dateFormatter.formatToParts(new Date(order.completedAt)).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
-      const day = `${dayParts.year}-${dayParts.month}-${dayParts.day}`;
-      const daily = dailyMap.get(day) ?? { date: day, orders: 0, salesCents: 0 };
-      daily.orders += 1;
-      daily.salesCents += merchantSalesCents;
-      dailyMap.set(day, daily);
+      if (order.completedAt) addTimeBucket(order.completedAt, merchantSalesCents);
     }
 
-    const completedOrders = orders.length;
-    const grossSalesCents = grossOrderVolumeCents - serviceFeesCents;
+    const ordersBySession = new Map<string, any[]>();
+    for (const order of tableOrders as any[]) {
+      const key = order.tableSessionId?.toString?.() || "";
+      if (!ordersBySession.has(key)) ordersBySession.set(key, []);
+      ordersBySession.get(key)!.push(order);
+      legacyMenuFlowFeesCents += order.customerServiceFeeCents ?? 0;
+    }
+
+    for (const session of tableSessions as any[]) {
+      const sessionId = session._id.toString();
+      const totalCents = Number(session.totalCents || 0);
+      const sessionOrders = ordersBySession.get(sessionId) ?? [];
+      subtotalCents += Number(session.subtotalCents || 0);
+      serviceFeeTotalCents += Number(session.serviceFeeCents || 0);
+      discountsCents += Number(session.discountCents || 0);
+      grossRevenueCents += totalCents;
+      for (const payment of session.payments ?? []) addPayment(payment.method, Number(payment.amountCents || 0));
+      const fulfillment = fulfillmentMap.get("TABLE") ?? { fulfillment: "TABLE", orders: 0, salesCents: 0 };
+      fulfillment.orders += 1;
+      fulfillment.salesCents += totalCents;
+      fulfillmentMap.set("TABLE", fulfillment);
+      if (session.closedAt) addTimeBucket(session.closedAt, totalCents);
+
+      const waiterId = session.waiterId?.toString?.() || "UNASSIGNED";
+      const waiter = waiterMap.get(waiterId) ?? {
+        waiterId,
+        waiterName: waiterId === "UNASSIGNED" ? "Sem garçom definido" : (userName.get(waiterId) ?? "Garçom"),
+        tables: 0,
+        orders: 0,
+        subtotalCents: 0,
+        serviceFeeCents: 0,
+        discountCents: 0,
+        salesCents: 0,
+      };
+      waiter.tables += 1;
+      waiter.orders += sessionOrders.length;
+      waiter.subtotalCents += Number(session.subtotalCents || 0);
+      waiter.serviceFeeCents += Number(session.serviceFeeCents || 0);
+      waiter.discountCents += Number(session.discountCents || 0);
+      waiter.salesCents += totalCents;
+      waiterMap.set(waiterId, waiter);
+    }
+
+    for (const order of saleOrders as any[]) {
+      for (const item of order.items ?? []) {
+        const unitPriceCents = cents(item.unitPriceCents, item.unitPrice);
+        const addonCents = (item.addons ?? []).reduce((sum: number, addon: any) => sum + cents(addon.priceCents, addon.price), 0);
+        const quantity = Math.max(0, Number(item.quantity || 0));
+        const productRevenueCents = quantity * (unitPriceCents + addonCents);
+        const productKey = item.productId?.toString?.() || item.productName;
+        const current = productMap.get(productKey) ?? { productName: item.productName || "Produto", quantity: 0, productRevenueCents: 0 };
+        current.quantity += quantity;
+        current.productRevenueCents += productRevenueCents;
+        productMap.set(productKey, current);
+
+        const catId = item.productId ? productCategory.get(item.productId.toString()) : undefined;
+        const catLabel = catId ? categoryName.get(catId) : undefined;
+        const categoryKey = catId || "SEM_CATEGORIA";
+        const category = categoryMap.get(categoryKey) ?? { categoryName: catLabel || "Sem categoria", quantity: 0, salesCents: 0 };
+        category.quantity += quantity;
+        category.salesCents += productRevenueCents;
+        categoryMap.set(categoryKey, category);
+      }
+    }
+
+    const cashSummary = {
+      openingCents: 0,
+      suppliesCents: 0,
+      withdrawalsCents: 0,
+      salesCents: 0,
+      cashSalesCents: 0,
+      pixSalesCents: 0,
+      creditSalesCents: 0,
+      debitSalesCents: 0,
+      expectedCashCents: 0,
+      declaredCashCents: 0,
+      differenceCents: 0,
+    };
+    for (const movement of cashMovements as any[]) {
+      const amount = Number(movement.amountCents || 0);
+      if (movement.type === "OPENING") cashSummary.openingCents += amount;
+      else if (movement.type === "SUPPLY") cashSummary.suppliesCents += amount;
+      else if (movement.type === "WITHDRAWAL") cashSummary.withdrawalsCents += amount;
+      else if (movement.type === "SALE") {
+        cashSummary.salesCents += amount;
+        if (movement.method === "CASH") cashSummary.cashSalesCents += amount;
+        if (movement.method === "PIX") cashSummary.pixSalesCents += amount;
+        if (movement.method === "CREDIT_CARD") cashSummary.creditSalesCents += amount;
+        if (movement.method === "DEBIT_CARD") cashSummary.debitSalesCents += amount;
+      }
+    }
+    for (const shift of cashShifts as any[]) {
+      if (shift.status === "CLOSED") {
+        cashSummary.expectedCashCents += Number(shift.expectedCashCents || 0);
+        cashSummary.declaredCashCents += Number(shift.declaredCashCents || 0);
+        cashSummary.differenceCents += Number(shift.differenceCents || 0);
+      }
+    }
+
+    const cancelledRows = (cancelled as any[]).map((order) => {
+      const rawTotal = cents(order.totalCents, order.total);
+      const dateValue = order.cancelledAt || order.rejectedAt;
+      return {
+        orderNumber: order.orderNumber || "Pedido",
+        fulfillment: order.fulfillment,
+        amountCents: Math.max(0, rawTotal - Number(order.customerServiceFeeCents || 0)),
+        reason: order.cancellationReason || order.rejectionReason || "Motivo não informado",
+        date: dateValue,
+      };
+    });
+
+    const shiftRows = (cashShifts as any[]).map((shift) => ({
+      id: shift._id.toString(),
+      status: shift.status,
+      openedAt: shift.openedAt,
+      openedByName: userName.get(shift.openedBy?.toString?.()) || "Operador",
+      openingAmountCents: Number(shift.openingAmountCents || 0),
+      closedAt: shift.closedAt,
+      closedByName: shift.closedBy ? (userName.get(shift.closedBy.toString()) || "Operador") : undefined,
+      expectedCashCents: Number(shift.expectedCashCents || 0),
+      declaredCashCents: Number(shift.declaredCashCents || 0),
+      differenceCents: Number(shift.differenceCents || 0),
+    }));
+    const operationRows = (cashMovements as any[]).slice(0, 200).map((movement) => ({
+      id: movement._id.toString(),
+      type: movement.type,
+      amountCents: Number(movement.amountCents || 0),
+      method: movement.method,
+      recordedAt: movement.recordedAt,
+      recordedByName: userName.get(movement.recordedBy?.toString?.()) || "Operador",
+      note: movement.note,
+    }));
+
+    const completedSales = (nonTableOrders as any[]).length + (tableSessions as any[]).length;
     return {
       periodStart: start,
       periodEnd: end,
@@ -953,22 +1188,35 @@ export class BillingService {
         state: restaurant.state,
       },
       salesMetrics: {
-        completedOrders,
-        grossSalesCents,
-        grossRevenueCents: grossSalesCents,
-        menuFlowServiceFeesCollectedCents: serviceFeesCents,
-        grossOrderVolumeCents,
-        averageTicketCents: completedOrders ? Math.round(grossSalesCents / completedOrders) : 0,
-        cancelledOrders,
+        completedOrders: completedSales,
+        orderTickets: saleOrders.length,
+        tableSessions: (tableSessions as any[]).length,
+        grossSalesCents: grossRevenueCents,
+        grossRevenueCents,
+        grossOrderVolumeCents: grossRevenueCents,
+        averageTicketCents: completedSales ? Math.round(grossRevenueCents / completedSales) : 0,
+        cancelledOrders: cancelledRows.length,
+        serviceFeeTotalCents,
+        legacyMenuFlowFeesCents,
       },
       details: {
         subtotalCents,
         deliveryFeesCents,
+        serviceFeeTotalCents,
         discountsCents,
-        products: Array.from(productMap.values()).sort((a, b) => b.quantity - a.quantity || a.productName.localeCompare(b.productName, 'pt-BR')),
+        products: Array.from(productMap.values()).sort((a, b) => b.quantity - a.quantity || a.productName.localeCompare(b.productName, "pt-BR")),
+        categories: Array.from(categoryMap.values()).sort((a, b) => b.salesCents - a.salesCents),
         paymentMethods: Array.from(paymentMap.values()).sort((a, b) => b.salesCents - a.salesCents),
         fulfillments: Array.from(fulfillmentMap.values()).sort((a, b) => b.salesCents - a.salesCents),
         daily: Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
+        hourly: Array.from(hourlyMap.values()).sort((a, b) => a.hour - b.hour),
+        waiters: Array.from(waiterMap.values()).sort((a, b) => b.serviceFeeCents - a.serviceFeeCents || b.salesCents - a.salesCents),
+        cancellations: cancelledRows,
+        cash: {
+          summary: cashSummary,
+          shifts: shiftRows,
+          operations: operationRows,
+        },
       },
     };
   }

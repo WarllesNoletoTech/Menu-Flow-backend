@@ -490,29 +490,33 @@ type MerchantSalesReportPdf = {
   periodStart: Date | string;
   periodEnd: Date | string;
   timezone: string;
-  restaurantSnapshot?: {
-    name?: string;
-    tradeName?: string;
-    cnpj?: string;
-    city?: string;
-    state?: string;
-  };
+  restaurantSnapshot?: { name?: string; tradeName?: string; cnpj?: string; city?: string; state?: string };
   salesMetrics: {
     completedOrders: number;
+    orderTickets?: number;
+    tableSessions?: number;
     grossRevenueCents: number;
-    menuFlowServiceFeesCollectedCents: number;
     grossOrderVolumeCents: number;
     averageTicketCents: number;
     cancelledOrders: number;
+    serviceFeeTotalCents?: number;
   };
   details: {
     subtotalCents: number;
     deliveryFeesCents: number;
+    serviceFeeTotalCents?: number;
     discountsCents: number;
     products: Array<{ productName: string; quantity: number; productRevenueCents: number }>;
-    paymentMethods: Array<{ method: string; orders: number; salesCents: number }>;
+    categories?: Array<{ categoryName: string; quantity: number; salesCents: number }>;
+    paymentMethods: Array<{ method: string; transactions?: number; orders?: number; salesCents: number }>;
     fulfillments: Array<{ fulfillment: string; orders: number; salesCents: number }>;
     daily: Array<{ date: string; orders: number; salesCents: number }>;
+    waiters?: Array<{ waiterName: string; tables: number; orders: number; subtotalCents: number; serviceFeeCents: number; discountCents: number; salesCents: number }>;
+    cancellations?: Array<{ orderNumber: string; fulfillment: string; amountCents: number; reason: string; date: string | Date }>;
+    cash?: {
+      summary?: { openingCents: number; suppliesCents: number; withdrawalsCents: number; salesCents: number; cashSalesCents: number; pixSalesCents: number; creditSalesCents: number; debitSalesCents: number; expectedCashCents: number; declaredCashCents: number; differenceCents: number };
+      shifts?: Array<{ status: string; openedAt: string | Date; openedByName: string; differenceCents: number }>;
+    };
   };
 };
 
@@ -561,8 +565,8 @@ export function renderMerchantSalesReportPdf(report: MerchantSalesReportPdf, log
     { kind: "section", title: "RESUMO FINANCEIRO" },
     { kind: "metric", label: "Pedidos concluídos", value: String(report.salesMetrics.completedOrders) },
     { kind: "metric", label: "Faturamento de vendas", value: money(report.salesMetrics.grossRevenueCents), strong: true },
-    { kind: "metric", label: "Taxas Menu Flow a repassar", value: money(report.salesMetrics.menuFlowServiceFeesCollectedCents) },
-    { kind: "metric", label: "Total transacionado", value: money(report.salesMetrics.grossOrderVolumeCents), strong: true },
+    { kind: "metric", label: "Taxa de serviço do salão", value: money(report.salesMetrics.serviceFeeTotalCents ?? report.details.serviceFeeTotalCents ?? 0) },
+    { kind: "metric", label: "Total vendido", value: money(report.salesMetrics.grossOrderVolumeCents), strong: true },
     { kind: "metric", label: "Ticket médio", value: money(report.salesMetrics.averageTicketCents) },
     { kind: "metric", label: "Pedidos cancelados", value: String(report.salesMetrics.cancelledOrders) },
     { kind: "metric", label: "Taxas de entrega", value: money(report.details.deliveryFeesCents) },
@@ -580,11 +584,28 @@ export function renderMerchantSalesReportPdf(report: MerchantSalesReportPdf, log
     { kind: "tableRow", first: "Subtotal dos produtos", second: "", third: money(report.details.subtotalCents), strong: true },
     { kind: "space", height: 8 },
     { kind: "section", title: "FORMAS DE PAGAMENTO" },
-    { kind: "tableHeader", first: "FORMA", second: "PEDIDOS", third: "FATURAMENTO" },
-    ...report.details.paymentMethods.map((item) => ({ kind: "tableRow" as const, first: salesPaymentLabel(item.method), second: String(item.orders), third: money(item.salesCents) })),
+    { kind: "tableHeader", first: "FORMA", second: "TRANSAÇÕES", third: "FATURAMENTO" },
+    ...report.details.paymentMethods.map((item) => ({ kind: "tableRow" as const, first: salesPaymentLabel(item.method), second: String(item.transactions ?? item.orders ?? 0), third: money(item.salesCents) })),
     ...(report.details.paymentMethods.length ? [] : [{ kind: "tableRow", first: "Sem dados", second: "-", third: "-" } as SalesPdfLine]),
     { kind: "space", height: 8 },
-    { kind: "section", title: "ENTREGA E RETIRADA" },
+    { kind: "section", title: "CATEGORIAS" },
+    { kind: "tableHeader", first: "CATEGORIA", second: "ITENS", third: "FATURAMENTO" },
+    ...(report.details.categories ?? []).map((item) => ({ kind: "tableRow" as const, first: item.categoryName, second: String(item.quantity), third: money(item.salesCents) })),
+    ...((report.details.categories ?? []).length ? [] : [{ kind: "tableRow", first: "Sem dados", second: "-", third: "-" } as SalesPdfLine]),
+    { kind: "space", height: 8 },
+    { kind: "section", title: "GARÇONS E TAXA DE SERVIÇO" },
+    { kind: "tableHeader", first: "GARÇOM", second: "MESAS", third: "TAXA DE SERVIÇO" },
+    ...(report.details.waiters ?? []).map((item) => ({ kind: "tableRow" as const, first: item.waiterName, second: String(item.tables), third: money(item.serviceFeeCents) })),
+    ...((report.details.waiters ?? []).length ? [] : [{ kind: "tableRow", first: "Sem dados de salão", second: "-", third: "-" } as SalesPdfLine]),
+    { kind: "space", height: 8 },
+    { kind: "section", title: "CAIXA" },
+    { kind: "metric", label: "Vendas registradas no caixa", value: money(report.details.cash?.summary?.salesCents ?? 0) },
+    { kind: "metric", label: "Vendas em dinheiro", value: money(report.details.cash?.summary?.cashSalesCents ?? 0) },
+    { kind: "metric", label: "Suprimentos", value: money(report.details.cash?.summary?.suppliesCents ?? 0) },
+    { kind: "metric", label: "Sangrias", value: money(report.details.cash?.summary?.withdrawalsCents ?? 0) },
+    { kind: "metric", label: "Diferença nos fechamentos", value: money(report.details.cash?.summary?.differenceCents ?? 0) },
+    { kind: "space", height: 8 },
+    { kind: "section", title: "CANAIS DE VENDA" },
     { kind: "tableHeader", first: "MODALIDADE", second: "PEDIDOS", third: "FATURAMENTO" },
     ...report.details.fulfillments.map((item) => ({ kind: "tableRow" as const, first: item.fulfillment === "DELIVERY" ? "Entrega" : item.fulfillment === "TABLE" ? "Mesa / salão" : "Retirada", second: String(item.orders), third: money(item.salesCents) })),
     ...(report.details.fulfillments.length ? [] : [{ kind: "tableRow", first: "Sem dados", second: "-", third: "-" } as SalesPdfLine]),
@@ -593,6 +614,16 @@ export function renderMerchantSalesReportPdf(report: MerchantSalesReportPdf, log
     { kind: "tableHeader", first: "DATA", second: "PEDIDOS", third: "FATURAMENTO" },
     ...report.details.daily.map((item) => ({ kind: "tableRow" as const, first: date(`${item.date}T12:00:00Z`, report.timezone), second: String(item.orders), third: money(item.salesCents) })),
     ...(report.details.daily.length ? [] : [{ kind: "tableRow", first: "Sem dados", second: "-", third: "-" } as SalesPdfLine]),
+    { kind: "space", height: 8 },
+    { kind: "section", title: "FECHAMENTOS DE CAIXA" },
+    { kind: "tableHeader", first: "ABERTURA / OPERADOR", second: "STATUS", third: "DIFERENÇA" },
+    ...(report.details.cash?.shifts ?? []).map((item) => ({ kind: "tableRow" as const, first: `${date(item.openedAt, report.timezone)} - ${item.openedByName}`, second: item.status === "OPEN" ? "Aberto" : "Fechado", third: money(item.differenceCents) })),
+    ...((report.details.cash?.shifts ?? []).length ? [] : [{ kind: "tableRow", first: "Sem turnos no período", second: "-", third: "-" } as SalesPdfLine]),
+    { kind: "space", height: 8 },
+    { kind: "section", title: "CANCELAMENTOS E RECUSAS" },
+    { kind: "tableHeader", first: "PEDIDO / MOTIVO", second: "CANAL", third: "VALOR" },
+    ...(report.details.cancellations ?? []).map((item) => ({ kind: "tableRow" as const, first: `${item.orderNumber} - ${item.reason}`, second: item.fulfillment === "DELIVERY" ? "Entrega" : item.fulfillment === "TABLE" ? "Mesa" : "Retirada", third: money(item.amountCents) })),
+    ...((report.details.cancellations ?? []).length ? [] : [{ kind: "tableRow", first: "Sem cancelamentos no período", second: "-", third: "-" } as SalesPdfLine]),
   ];
 
   const height = (line: SalesPdfLine) => line.kind === "section" ? 28 : line.kind === "space" ? (line.height ?? 8) : line.kind === "tableHeader" ? 23 : 19;

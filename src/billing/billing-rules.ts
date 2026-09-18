@@ -1,4 +1,5 @@
-export const MENU_FLOW_ORDER_SERVICE_FEE_CENTS = 100;
+// A taxa por pedido do Menu Flow foi desativada. Mantemos o campo histórico nos pedidos antigos.
+export const MENU_FLOW_ORDER_SERVICE_FEE_CENTS = 0;
 export const DEFAULT_BILLING_TIMEZONE = 'America/Sao_Paulo';
 
 export function firstTuesdayOfMonth(year: number, month: number, timezone = DEFAULT_BILLING_TIMEZONE) {

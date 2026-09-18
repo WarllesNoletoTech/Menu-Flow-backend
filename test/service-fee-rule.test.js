@@ -34,16 +34,8 @@ const { Types } = require('mongoose');
 const { BillingService } = require('../dist/billing/billing.service');
 const query = (value) => ({ select() { return this; }, sort() { return this; }, lean: async () => value });
 
-test('geração copia snapshots por pedido e exclui orderId já contabilizado', async () => {
+test('novos relatórios da plataforma cobram somente mensalidade', async () => {
   const restaurantId = new Types.ObjectId();
-  const billedId = new Types.ObjectId();
-  const firstId = new Types.ObjectId();
-  const secondId = new Types.ObjectId();
-  const orders = [
-    { _id: billedId, orderNumber: 'MF-OLD', completedAt: new Date(), fulfillment: 'PICKUP', totalCents: 2100, customerServiceFeeCents: 100 },
-    { _id: firstId, orderNumber: 'MF-A', completedAt: new Date(), fulfillment: 'PICKUP', totalCents: 2100, customerServiceFeeCents: 100 },
-    { _id: secondId, orderNumber: 'MF-B', completedAt: new Date(), fulfillment: 'DELIVERY', totalCents: 5150, customerServiceFeeCents: 150 },
-  ];
   let createdReport;
   let insertedItems;
   const reports = {
@@ -52,23 +44,22 @@ test('geração copia snapshots por pedido e exclui orderId já contabilizado', 
     deleteOne: async () => undefined,
   };
   const reportItems = {
-    find: () => query([{ orderId: billedId }]),
+    find: () => query([]),
     insertMany: async (value) => (insertedItems = value),
   };
   const restaurants = { findById: () => query({ _id: restaurantId, name: 'Loja', timezone: 'America/Sao_Paulo' }) };
-  const orderModel = { find: () => query(orders) };
+  const orderModel = { find: () => query([]) };
   const settings = { findOne: () => ({ lean: async () => null }) };
   const counters = { findOneAndUpdate: async () => ({ sequence: 1 }) };
   const audits = { create: async () => undefined };
-  const service = new BillingService({}, {}, reports, reportItems, settings, counters, restaurants, orderModel, audits, {}, {}, {});
-  service.previewReport = async () => ({ orderCount: 2, monthlyFeeAlreadyIncluded: false });
+  const service = new BillingService({}, {}, reports, reportItems, settings, counters, restaurants, orderModel, {}, {}, {}, {}, {}, audits, {}, {}, {});
+  service.previewReport = async () => ({ orderCount: 0, monthlyFeeAlreadyIncluded: false });
   service.report = async () => createdReport;
 
   await service.generateReport({ restaurantId: restaurantId.toString(), periodStart: '2026-09-01', periodEnd: '2026-09-30', includeMonthlyFee: true, monthlyFeeCents: 15000 }, new Types.ObjectId().toString());
 
-  assert.equal(createdReport.orderCount, 2);
-  assert.equal(createdReport.serviceFeeTotalCents, 250);
-  assert.equal(createdReport.totalCents, 15250);
-  assert.deepEqual(insertedItems.map((item) => item.orderId), [firstId, secondId]);
-  assert.deepEqual(insertedItems.map((item) => item.feeCents), [100, 150]);
+  assert.equal(createdReport.orderCount, 0);
+  assert.equal(createdReport.serviceFeeTotalCents, 0);
+  assert.equal(createdReport.totalCents, 15000);
+  assert.equal(insertedItems, undefined);
 });

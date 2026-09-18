@@ -777,3 +777,174 @@ export function renderMerchantSalesReportPdf(report: MerchantSalesReportPdf, log
   chunks.push(Buffer.from(`${table}trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`));
   return Buffer.concat(chunks);
 }
+
+type BillingInvoicePdfInput = {
+  period: string;
+  createdAt?: Date | string;
+  periodStart: Date | string;
+  periodEnd: Date | string;
+  completedOrderCount: number;
+  revenueCents: number;
+  amountCents: number;
+  status: string;
+  dueDate?: Date | string;
+  pricingSnapshot?: {
+    tier?: { minRevenueCents?: number; maxRevenueCents?: number | null; amountCents?: number };
+    billingBasis?: string;
+  };
+  restaurantSnapshot: { name?: string; tradeName?: string; cnpj?: string; city?: string; state?: string };
+  planName?: string;
+  paymentSnapshot?: { pixReceiverName?: string; pixKey?: string };
+  timezone?: string;
+};
+
+function invoiceStatusLabel(status: string) {
+  return ({ OPEN: "Pendente", PAID: "Pago", OVERDUE: "Vencido", WAIVED: "Isento", CANCELLED: "Cancelado" } as Record<string, string>)[status] ?? status;
+}
+
+function invoicePeriodLabel(period: string) {
+  const [year, month] = period.split("-").map(Number);
+  return normalizePdfText(new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(new Date(year, month - 1, 1)));
+}
+
+export function renderBillingInvoicePdf(invoice: BillingInvoicePdfInput, logo?: Buffer) {
+  const objects: Array<Buffer | string> = [];
+  const add = (value: Buffer | string) => { objects.push(value); return objects.length; };
+  const font = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+  const bold = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>");
+
+  let imageId: number | undefined;
+  let imageSize: { width: number; height: number } | undefined;
+  let maskId: number | undefined;
+  if (logo) {
+    const image = pngImage(logo);
+    imageSize = image;
+    if (image.alpha) {
+      maskId = add(Buffer.concat([
+        Buffer.from(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${image.alpha.length} >>\nstream\n`),
+        image.alpha,
+        Buffer.from("\nendstream"),
+      ]));
+    }
+    imageId = add(Buffer.concat([
+      Buffer.from(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode${maskId ? ` /SMask ${maskId} 0 R` : ""} /Length ${image.rgb.length} >>\nstream\n`),
+      image.rgb,
+      Buffer.from("\nendstream"),
+    ]));
+  }
+
+  const out: Buffer[] = [];
+  const raw = (value: string) => out.push(Buffer.from(value + "\n", "ascii"));
+  const t = (x: number, y: number, value: unknown, size = 10, isBold = false) => {
+    out.push(Buffer.from(`BT /${isBold ? "B" : "F"} ${size} Tf ${x} ${y} Td (`, "ascii"), encodeWinAnsi(value), Buffer.from(") Tj ET\n", "ascii"));
+  };
+  const tRight = (right: number, y: number, value: unknown, size = 10, isBold = false) => t(Math.max(MARGIN_LEFT, right - approximateWidth(value, size)), y, value, size, isBold);
+  const line = (y: number, branded = false) => raw(`${branded ? `${BRAND_R} ${BRAND_G} ${BRAND_B}` : "0.84 0.81 0.78"} RG ${MARGIN_LEFT} ${y} m ${CONTENT_RIGHT} ${y} l S`);
+  const box = (x: number, y: number, w: number, h: number, fill: string) => raw(`${fill} rg ${x} ${y} ${w} ${h} re f`);
+
+  const tz = invoice.timezone || "America/Sao_Paulo";
+  const restaurant = invoice.restaurantSnapshot || {};
+  const businessName = restaurant.tradeName || restaurant.name || "Estabelecimento";
+  const tier = invoice.pricingSnapshot?.tier;
+  const tierLabel = tier
+    ? tier.maxRevenueCents == null
+      ? `Acima de ${money(Math.max(0, Number(tier.minRevenueCents ?? 0) - 1))}`
+      : `${money(Number(tier.minRevenueCents ?? 0))} a ${money(Number(tier.maxRevenueCents ?? 0))}`
+    : "Faixa por faturamento";
+
+  // Cabeçalho institucional
+  box(0, 700, PAGE_WIDTH, 142, `${BRAND_R} ${BRAND_G} ${BRAND_B}`);
+  if (imageId && imageSize) {
+    const maxW = 145, maxH = 54;
+    const scale = Math.min(maxW / imageSize.width, maxH / imageSize.height);
+    const w = imageSize.width * scale, h = imageSize.height * scale;
+    raw(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${MARGIN_LEFT} ${(774 - h / 2).toFixed(2)} cm /Logo Do Q`);
+  } else {
+    raw("1 1 1 rg");
+    t(MARGIN_LEFT, 775, "Menu Flow", 18, true);
+  }
+  raw("1 1 1 rg");
+  tRight(CONTENT_RIGHT, 786, "MENSALIDADE MENU FLOW", 14, true);
+  tRight(CONTENT_RIGHT, 764, `Referência: ${invoicePeriodLabel(invoice.period)}`, 9);
+  tRight(CONTENT_RIGHT, 746, `Status: ${invoiceStatusLabel(invoice.status)}`, 9, true);
+  raw("0.14 0.12 0.11 rg");
+
+  // Estabelecimento
+  t(MARGIN_LEFT, 670, businessName, 15, true);
+  let y = 651;
+  if (restaurant.cnpj) { t(MARGIN_LEFT, y, `CNPJ: ${restaurant.cnpj}`, 9); y -= 16; }
+  const location = [restaurant.city, restaurant.state].filter(Boolean).join(" / ");
+  if (location) { t(MARGIN_LEFT, y, location, 9); y -= 16; }
+  line(617, true);
+
+  // Resumo da cobrança
+  raw(`${BRAND_R} ${BRAND_G} ${BRAND_B} rg`);
+  t(MARGIN_LEFT, 592, "RESUMO DA COBRANÇA", 10.5, true);
+  raw("0.14 0.12 0.11 rg");
+  const rows: Array<[string, string, boolean?]> = [
+    ["Faturamento considerado", money(invoice.revenueCents), true],
+    ["Vendas consideradas", String(invoice.completedOrderCount)],
+    ["Faixa aplicada", tierLabel],
+    ["Plano", invoice.planName || "Menu Flow por faturamento"],
+    ["Mensalidade", money(invoice.amountCents), true],
+    ["Vencimento", invoice.dueDate ? date(invoice.dueDate, tz) : "A definir"],
+  ];
+  y = 566;
+  for (const [label, value, strong] of rows) {
+    t(MARGIN_LEFT, y, label, 9, Boolean(strong));
+    tRight(CONTENT_RIGHT, y, value, 9, Boolean(strong));
+    y -= 24;
+  }
+
+  // Destaque do total
+  box(MARGIN_LEFT, 382, CONTENT_RIGHT - MARGIN_LEFT, 62, "0.97 0.94 0.90");
+  raw(`${BRAND_R} ${BRAND_G} ${BRAND_B} rg`);
+  t(MARGIN_LEFT + 16, 417, "VALOR DA MENSALIDADE", 9, true);
+  tRight(CONTENT_RIGHT - 16, 403, money(invoice.amountCents), 20, true);
+  raw("0.14 0.12 0.11 rg");
+
+  // Regra transparente
+  raw(`${BRAND_R} ${BRAND_G} ${BRAND_B} rg`);
+  t(MARGIN_LEFT, 346, "COMO O VALOR FOI CALCULADO", 10.5, true);
+  raw("0.14 0.12 0.11 rg");
+  t(MARGIN_LEFT, 323, "Base: produtos vendidos menos descontos no mês de referência.", 9);
+  t(MARGIN_LEFT, 305, "Não entram na faixa: taxa de entrega, taxa de serviço do garçom e pedidos cancelados.", 8.5);
+  t(MARGIN_LEFT, 287, `Período apurado: ${date(invoice.periodStart, tz)} a ${date(invoice.periodEnd, tz)}.`, 8.5);
+
+  // Pagamento
+  raw(`${BRAND_R} ${BRAND_G} ${BRAND_B} rg`);
+  t(MARGIN_LEFT, 246, "DADOS PARA PAGAMENTO", 10.5, true);
+  raw("0.14 0.12 0.11 rg");
+  t(MARGIN_LEFT, 222, `Favorecido: ${invoice.paymentSnapshot?.pixReceiverName || "Consulte o Menu Flow"}`, 9, true);
+  t(MARGIN_LEFT, 202, `Chave PIX: ${invoice.paymentSnapshot?.pixKey || "Não informada"}`, 9);
+  t(MARGIN_LEFT, 177, "Após a confirmação do pagamento, o status da mensalidade será atualizado no painel.", 8.5);
+
+  line(102);
+  raw("0.42 0.39 0.37 rg");
+  t(MARGIN_LEFT, 78, "Menu Flow - Cardápio digital e gestão para restaurantes", 7.5, true);
+  t(MARGIN_LEFT, 62, "Instagram: @menuflow_oficial", 7.5);
+  tRight(CONTENT_RIGHT, 62, `Documento emitido em ${date(invoice.createdAt || new Date(), tz)}`, 7.5);
+
+  const stream = Buffer.concat(out);
+  const contentId = add(Buffer.concat([Buffer.from(`<< /Length ${stream.length} >>\nstream\n`), stream, Buffer.from("endstream")]));
+  const pageId = add("");
+  const pagesId = add("");
+  objects[pageId - 1] = `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] /Resources << /Font << /F ${font} 0 R /B ${bold} 0 R >>${imageId ? ` /XObject << /Logo ${imageId} 0 R >>` : ""} >> /Contents ${contentId} 0 R >>`;
+  objects[pagesId - 1] = `<< /Type /Pages /Kids [${pageId} 0 R] /Count 1 >>`;
+  const catalog = add(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  const chunks = [Buffer.from("%PDF-1.4\n%MENUFLOW\n")];
+  const offsets = [0];
+  let offset = chunks[0].length;
+  objects.forEach((object, index) => {
+    offsets.push(offset);
+    const body = Buffer.isBuffer(object) ? object : Buffer.from(object);
+    const chunk = Buffer.concat([Buffer.from(`${index + 1} 0 obj\n`), body, Buffer.from("\nendobj\n")]);
+    chunks.push(chunk);
+    offset += chunk.length;
+  });
+  const xref = offset;
+  let table = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let index = 1; index < offsets.length; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  chunks.push(Buffer.from(`${table}trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`));
+  return Buffer.concat(chunks);
+}

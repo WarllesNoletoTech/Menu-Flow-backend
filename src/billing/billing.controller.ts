@@ -114,6 +114,17 @@ export class BillingController {
   ) {
     return this.billing.invoice(id);
   }
+  @Get("invoices/:id/pdf")
+  @Header("Cache-Control", "no-store, private")
+  @Roles(Role.SUPER_ADMIN)
+  async invoicePdf(@Param("id") id: string, @Res() res: any) {
+    const out = await this.billing.invoicePdf(id);
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${out.filename}"`,
+    });
+    res.send(out.pdf);
+  }
   @Patch("invoices/:id/status") @Roles(Role.SUPER_ADMIN) setStatus(
     @Param("id") id: string,
     @Body() b: StatusDto,
@@ -163,6 +174,22 @@ export class BillingController {
   ) {
     return this.billing.merchant(r.user.restaurantId, p);
   }
+  @Get("me/invoices/:id/pdf")
+  @Header("Cache-Control", "no-store, private")
+  @Roles(Role.RESTAURANT_ADMIN)
+  async merchantInvoicePdf(
+    @Param("id") id: string,
+    @Req() r: { user: { restaurantId: string } },
+    @Res() res: any,
+  ) {
+    const out = await this.billing.invoicePdf(id, r.user.restaurantId);
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${out.filename}"`,
+    });
+    res.send(out.pdf);
+  }
+
   @Get("reports/preview") @Roles(Role.SUPER_ADMIN) preview(
     @Query("restaurantId") id: string,
     @Query("start") start: string,

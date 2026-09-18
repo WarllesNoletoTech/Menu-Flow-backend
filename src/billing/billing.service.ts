@@ -4,6 +4,8 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { existsSync, readFileSync } from "node:fs";
@@ -37,10 +39,9 @@ import {
 } from "../orders/order-metrics.service";
 import {
   DEFAULT_BILLING_TIMEZONE,
-  firstTuesdayOfMonth,
   isFirstTuesday,
 } from "./billing-rules";
-import { renderBillingReportPdf, renderMerchantSalesReportPdf } from "./billing-pdf";
+import { renderBillingInvoicePdf, renderBillingReportPdf, renderMerchantSalesReportPdf } from "./billing-pdf";
 import { zonedDateRange } from "../common/date-range";
 
 export function sumOrderServiceFees(
@@ -53,9 +54,11 @@ export function sumOrderServiceFees(
 }
 
 @Injectable()
-export class BillingService {
+export class BillingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BillingService.name);
   private logoCache?: Buffer;
+  private automaticBillingTimer?: NodeJS.Timeout;
+  private automaticBillingStartupTimer?: NodeJS.Timeout;
   constructor(
     @InjectModel(BillingPlan.name) private plans: Model<BillingPlan>,
     @InjectModel(BillingInvoice.name) private invoices: Model<BillingInvoice>,
@@ -77,6 +80,56 @@ export class BillingService {
     @InjectModel(User.name) private users: Model<User>,
     private config: ConfigService,
   ) {}
+
+  onModuleInit() {
+    if (this.config.get<string>("BILLING_AUTOMATION_ENABLED") === "false") return;
+    this.automaticBillingStartupTimer = setTimeout(() => {
+      void this.ensureAutomaticMonthlyBilling(true);
+    }, 12000);
+    this.automaticBillingStartupTimer.unref?.();
+    this.automaticBillingTimer = setInterval(() => {
+      void this.ensureAutomaticMonthlyBilling(false);
+    }, 30 * 60 * 1000);
+    this.automaticBillingTimer.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.automaticBillingStartupTimer) clearTimeout(this.automaticBillingStartupTimer);
+    if (this.automaticBillingTimer) clearInterval(this.automaticBillingTimer);
+  }
+
+  private saoPauloCalendar(now = new Date()) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: DEFAULT_BILLING_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now);
+    const value = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+    return { year: value("year"), month: value("month"), day: value("day") };
+  }
+
+  private previousPeriodFor(year: number, month: number) {
+    const previousMonth = month === 1 ? 12 : month - 1;
+    const previousYear = month === 1 ? year - 1 : year;
+    return `${previousYear}-${String(previousMonth).padStart(2, "0")}`;
+  }
+
+  private async ensureAutomaticMonthlyBilling(catchUp: boolean) {
+    try {
+      const calendar = this.saoPauloCalendar();
+      if (!catchUp && calendar.day !== 1) return;
+      const referencePeriod = this.previousPeriodFor(calendar.year, calendar.month);
+      const result = await this.generate(referencePeriod);
+      const created = result.results.filter((item) => item.created).length;
+      if (created)
+        this.logger.log(`Cobrança mensal automática: ${created} mensalidade(s) gerada(s) para ${referencePeriod}.`);
+    } catch (error) {
+      this.logger.error(
+        `Falha na geração automática das mensalidades: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   async previewReport(
     restaurantId: string,
@@ -593,12 +646,16 @@ export class BillingService {
       active: true,
       "tiers.minRevenueCents": { $exists: true },
     });
-    if (plan) return plan;
+    if (plan) {
+      if (!plan.dueDay) { plan.dueDay = 5; await plan.save(); }
+      return plan;
+    }
     await this.plans.updateMany({}, { $set: { isDefault: false } });
     plan = await this.plans.create({
       name: "Menu Flow por faturamento",
       active: true,
       isDefault: true,
+      dueDay: 5,
       tiers: [
         { minRevenueCents: 0, maxRevenueCents: 100000, amountCents: 4990 },
         { minRevenueCents: 100001, maxRevenueCents: 350000, amountCents: 6990 },
@@ -750,11 +807,11 @@ export class BillingService {
     };
   }
 
-  private nextBillingDueDate(period: string) {
+  private nextBillingDueDate(period: string, dueDay = 5) {
     const [year, month] = period.split("-").map(Number);
     const nextYear = month === 12 ? year + 1 : year;
     const nextMonth = month === 12 ? 1 : month + 1;
-    const day = firstTuesdayOfMonth(nextYear, nextMonth, DEFAULT_BILLING_TIMEZONE);
+    const day = Math.min(28, Math.max(1, Number(dueDay) || 5));
     return new Date(
       `${nextYear}-${String(nextMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}T23:59:59-03:00`,
     );
@@ -811,13 +868,13 @@ export class BillingService {
 
   async generate(period: string) {
     const defaultPlan = await this.ensureDefaultRevenuePlan();
-    const { start, end } = this.periodRange(period);
     const restaurants = await this.restaurants
       .find({ blocked: { $ne: true } })
       .populate("billingPlanId")
       .lean();
     const results: Array<Record<string, unknown>> = [];
     for (const restaurant of restaurants) {
+      const { start, end } = this.periodRange(period, restaurant.timezone || DEFAULT_BILLING_TIMEZONE);
       const existing = await this.invoices.exists({
         restaurantId: (restaurant as any)._id,
         period,
@@ -860,7 +917,8 @@ export class BillingService {
         effectiveStart,
       );
       const tier = this.tierForRevenue(plan, basis.revenueCents);
-      const dueDate = this.nextBillingDueDate(period);
+      const dueDay = Number(restaurant.billingDueDay ?? plan.dueDay ?? 5);
+      const dueDate = this.nextBillingDueDate(period, dueDay);
       try {
         const invoice = await this.invoices.create({
           restaurantId: (restaurant as any)._id,
@@ -886,6 +944,8 @@ export class BillingService {
             deliveryPickupCount: basis.deliveryPickupCount,
             closedTableCount: basis.closedTableCount,
             timezone: DEFAULT_BILLING_TIMEZONE,
+            generatedOnDay: 1,
+            dueDay,
           },
         });
         results.push({
@@ -936,6 +996,40 @@ export class BillingService {
       .lean();
     if (!value) throw new NotFoundException("Fatura não encontrada.");
     return value;
+  }
+  async invoicePdf(id: string, merchantId?: string) {
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException("Cobrança não encontrada.");
+    const query: any = { _id: id };
+    if (merchantId) query.restaurantId = this.objectId(merchantId);
+    const value: any = await this.invoices
+      .findOne(query)
+      .populate("restaurantId", "name tradeName cnpj city state timezone")
+      .populate("billingPlanId", "name")
+      .lean();
+    if (!value) throw new NotFoundException("Cobrança não encontrada.");
+    const payment = await this.settings.findOne({ key: "global" }).select("pixReceiverName pixKey").lean();
+    const logo = await this.billingLogo();
+    const restaurant: any = value.restaurantId ?? {};
+    const pdf = renderBillingInvoicePdf(
+      {
+        ...value,
+        restaurantSnapshot: {
+          name: restaurant.name,
+          tradeName: restaurant.tradeName,
+          cnpj: restaurant.cnpj,
+          city: restaurant.city,
+          state: restaurant.state,
+        },
+        planName: value.billingPlanId?.name ?? value.pricingSnapshot?.planName ?? "Menu Flow por faturamento",
+        paymentSnapshot: { pixReceiverName: payment?.pixReceiverName, pixKey: payment?.pixKey },
+        timezone: restaurant.timezone || DEFAULT_BILLING_TIMEZONE,
+      },
+      logo,
+    );
+    return {
+      pdf,
+      filename: `menu-flow-mensalidade-${value.period}.pdf`,
+    };
   }
   async setStatus(id: string, status: BillingInvoiceStatus, actorId: string) {
     if (

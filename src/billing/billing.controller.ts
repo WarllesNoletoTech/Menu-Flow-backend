@@ -33,8 +33,8 @@ import { Roles, RolesGuard } from "../common/roles.guard";
 import { BillingInvoiceStatus, BillingReportStatus } from "../common/schemas";
 import { BillingService } from "./billing.service";
 class TierDto {
-  @IsInt() @Min(0) minOrders!: number;
-  @IsOptional() @IsInt() @Min(0) maxOrders!: number | null;
+  @IsInt() @Min(0) minRevenueCents!: number;
+  @IsOptional() @IsInt() @Min(0) maxRevenueCents!: number | null;
   @IsInt() @Min(0) amountCents!: number;
 }
 class PlanDto {

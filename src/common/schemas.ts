@@ -387,8 +387,11 @@ OrderSchema.pre("validate", function backfillLegacyMoney() {
 
 @Schema({ _id: false })
 export class BillingTier {
-  @Prop({ required: true, min: 0 }) minOrders!: number;
-  @Prop({ type: Number, min: 0, default: null }) maxOrders!: number | null;
+  // Campos legados preservados para documentos antigos. Novas cobranças usam faturamento.
+  @Prop({ min: 0 }) minOrders?: number;
+  @Prop({ type: Number, min: 0, default: null }) maxOrders?: number | null;
+  @Prop({ required: true, min: 0, default: 0 }) minRevenueCents!: number;
+  @Prop({ type: Number, min: 0, default: null }) maxRevenueCents!: number | null;
   @Prop({ required: true, min: 0 }) amountCents!: number;
 }
 @Schema({ timestamps: true })
@@ -418,6 +421,7 @@ export class BillingInvoice {
   @Prop({ required: true }) periodStart!: Date;
   @Prop({ required: true }) periodEnd!: Date;
   @Prop({ required: true, min: 0 }) completedOrderCount!: number;
+  @Prop({ required: true, min: 0, default: 0 }) revenueCents!: number;
   @Prop({ required: true, min: 0 }) amountCents!: number;
   @Prop({ enum: BillingInvoiceStatus, default: BillingInvoiceStatus.OPEN })
   status!: BillingInvoiceStatus;

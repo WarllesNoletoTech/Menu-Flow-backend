@@ -37,6 +37,7 @@ import {
 } from "../orders/order-metrics.service";
 import {
   DEFAULT_BILLING_TIMEZONE,
+  firstTuesdayOfMonth,
   isFirstTuesday,
 } from "./billing-rules";
 import { renderBillingReportPdf, renderMerchantSalesReportPdf } from "./billing-pdf";
@@ -553,34 +554,63 @@ export class BillingService {
   validateTiers(tiers: BillingTier[]) {
     if (!tiers.length)
       throw new BadRequestException("Cadastre ao menos uma faixa.");
-    const sorted = [...tiers].sort((a, b) => a.minOrders - b.minOrders);
-    if (sorted[0].minOrders !== 0)
-      throw new BadRequestException("A primeira faixa deve iniciar em 0.");
+    const sorted = [...tiers].sort(
+      (a, b) => Number(a.minRevenueCents ?? 0) - Number(b.minRevenueCents ?? 0),
+    );
+    if (Number(sorted[0].minRevenueCents ?? -1) !== 0)
+      throw new BadRequestException("A primeira faixa deve iniciar em R$ 0,00.");
     sorted.forEach((tier, index) => {
+      const min = Number(tier.minRevenueCents);
+      const max = tier.maxRevenueCents === null ? null : Number(tier.maxRevenueCents);
       if (
-        !Number.isInteger(tier.minOrders) ||
+        !Number.isInteger(min) ||
+        min < 0 ||
         !Number.isInteger(tier.amountCents) ||
         tier.amountCents < 0 ||
-        (tier.maxOrders !== null &&
-          (!Number.isInteger(tier.maxOrders) ||
-            tier.maxOrders < tier.minOrders))
+        (max !== null && (!Number.isInteger(max) || max < min))
       )
-        throw new BadRequestException("Faixa de cobrança inválida.");
-      if (index && tier.minOrders !== (sorted[index - 1].maxOrders ?? -2) + 1)
-        throw new BadRequestException(
-          "As faixas devem ser contínuas e não podem se sobrepor.",
-        );
-      if (index < sorted.length - 1 && tier.maxOrders === null)
+        throw new BadRequestException("Faixa de faturamento inválida.");
+      if (index) {
+        const previousMax = sorted[index - 1].maxRevenueCents;
+        if (previousMax === null || min !== Number(previousMax) + 1)
+          throw new BadRequestException(
+            "As faixas de faturamento devem ser contínuas e não podem se sobrepor.",
+          );
+      }
+      if (index < sorted.length - 1 && max === null)
         throw new BadRequestException(
           "Somente a última faixa pode ser ilimitada.",
         );
     });
-    if (sorted.at(-1)?.maxOrders !== null)
+    if (sorted.at(-1)?.maxRevenueCents !== null)
       throw new BadRequestException("A última faixa deve ser ilimitada.");
     return sorted;
   }
-  listPlans() {
-    return this.plans.find().sort({ active: -1, name: 1 }).lean();
+
+  private async ensureDefaultRevenuePlan() {
+    let plan = await this.plans.findOne({
+      isDefault: true,
+      active: true,
+      "tiers.minRevenueCents": { $exists: true },
+    });
+    if (plan) return plan;
+    await this.plans.updateMany({}, { $set: { isDefault: false } });
+    plan = await this.plans.create({
+      name: "Menu Flow por faturamento",
+      active: true,
+      isDefault: true,
+      tiers: [
+        { minRevenueCents: 0, maxRevenueCents: 100000, amountCents: 4990 },
+        { minRevenueCents: 100001, maxRevenueCents: 350000, amountCents: 6990 },
+        { minRevenueCents: 350001, maxRevenueCents: null, amountCents: 12990 },
+      ],
+    });
+    return plan;
+  }
+
+  async listPlans() {
+    await this.ensureDefaultRevenuePlan();
+    return this.plans.find().sort({ isDefault: -1, active: -1, name: 1 }).lean();
   }
   async createPlan(input: Partial<BillingPlan>) {
     const tiers = this.validateTiers(input.tiers ?? []);
@@ -655,17 +685,94 @@ export class BillingService {
   periodRange(period: string, timezone = "America/Sao_Paulo") {
     return zonedPeriodRange(period, timezone);
   }
-  tierFor(plan: BillingPlan, count: number) {
-    const tier = plan.tiers.find(
-      (t) =>
-        count >= t.minOrders && (t.maxOrders === null || count <= t.maxOrders),
+
+  private isRevenuePlan(plan?: Partial<BillingPlan> | null) {
+    return Boolean(
+      plan?.tiers?.length &&
+        plan.tiers.every((tier) => Number.isInteger(Number(tier.minRevenueCents))),
     );
+  }
+
+  tierForRevenue(plan: BillingPlan, revenueCents: number) {
+    const tier = plan.tiers.find((item) => {
+      const min = Number(item.minRevenueCents ?? 0);
+      const max = item.maxRevenueCents === null ? null : Number(item.maxRevenueCents);
+      return revenueCents >= min && (max === null || revenueCents <= max);
+    });
     if (!tier)
       throw new BadRequestException(
-        "O plano não cobre esta quantidade de pedidos.",
+        "O plano não cobre este faturamento mensal.",
       );
     return tier;
   }
+
+  private async billingBasis(
+    restaurantId: Types.ObjectId,
+    start: Date,
+    end: Date,
+    billingStartAt?: Date,
+  ) {
+    const lower = billingStartAt && billingStartAt > start ? billingStartAt : start;
+    const [orders, sessions] = await Promise.all([
+      this.orders
+        .find({
+          restaurantId,
+          fulfillment: { $ne: "TABLE" },
+          status: "COMPLETED",
+          completedAt: { $gte: lower, $lte: end },
+        })
+        .select("subtotalCents discountCents")
+        .lean(),
+      this.tableSessions
+        .find({
+          restaurantId,
+          status: "CLOSED",
+          closedAt: { $gte: lower, $lte: end },
+        })
+        .select("subtotalCents discountCents")
+        .lean(),
+    ]);
+    const orderRevenueCents = orders.reduce(
+      (sum, order) =>
+        sum + Math.max(0, Number(order.subtotalCents ?? 0) - Number(order.discountCents ?? 0)),
+      0,
+    );
+    const tableRevenueCents = sessions.reduce(
+      (sum, session) =>
+        sum + Math.max(0, Number(session.subtotalCents ?? 0) - Number(session.discountCents ?? 0)),
+      0,
+    );
+    return {
+      revenueCents: orderRevenueCents + tableRevenueCents,
+      completedOrderCount: orders.length + sessions.length,
+      deliveryPickupCount: orders.length,
+      closedTableCount: sessions.length,
+    };
+  }
+
+  private nextBillingDueDate(period: string) {
+    const [year, month] = period.split("-").map(Number);
+    const nextYear = month === 12 ? year + 1 : year;
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const day = firstTuesdayOfMonth(nextYear, nextMonth, DEFAULT_BILLING_TIMEZONE);
+    return new Date(
+      `${nextYear}-${String(nextMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}T23:59:59-03:00`,
+    );
+  }
+
+  private async revenuePlanForRestaurant(restaurant: any) {
+    const populated = restaurant.billingPlanId as
+      | (BillingPlan & { _id: Types.ObjectId })
+      | undefined;
+    if (populated && this.isRevenuePlan(populated)) return populated;
+    const defaultPlan = await this.ensureDefaultRevenuePlan();
+    await this.restaurants.updateOne(
+      { _id: restaurant._id },
+      { $set: { billingPlanId: defaultPlan._id } },
+    );
+    return defaultPlan as BillingPlan & { _id: Types.ObjectId };
+  }
+
   async estimateRestaurant(restaurantId: string, period: string) {
     const rid = this.objectId(restaurantId);
     const restaurant = await this.restaurants
@@ -675,46 +782,41 @@ export class BillingService {
     if (!restaurant)
       throw new NotFoundException("Estabelecimento não encontrado.");
     const { start, end } = this.periodRange(period, restaurant.timezone);
-    const lower =
-      restaurant.billingStartAt && restaurant.billingStartAt > start
-        ? restaurant.billingStartAt
-        : start;
-    const count = await this.metrics.countCompleted(rid, lower, end);
-    const summary = {
-      id: (restaurant as any)._id,
-      name: restaurant.tradeName || restaurant.name,
-    };
-    if (!restaurant.billingPlanId)
-      return {
-        period,
-        restaurant: summary,
-        completedOrderCount: count,
-        plan: null,
-        tier: null,
-        amountCents: null,
-        estimated: true,
-      };
-    const plan = restaurant.billingPlanId as unknown as BillingPlan & {
-      _id: Types.ObjectId;
-    };
-    const tier = this.tierFor(plan, count);
+    const plan = await this.revenuePlanForRestaurant(restaurant);
+    const basis = await this.billingBasis(
+      rid,
+      start,
+      end,
+      restaurant.billingStartAt,
+    );
+    const tier = this.tierForRevenue(plan, basis.revenueCents);
     return {
       period,
-      restaurant: summary,
-      completedOrderCount: count,
+      restaurant: {
+        id: (restaurant as any)._id,
+        name: restaurant.tradeName || restaurant.name,
+      },
+      ...basis,
       plan: { id: plan._id, name: plan.name },
-      tier,
+      tier: {
+        minRevenueCents: tier.minRevenueCents,
+        maxRevenueCents: tier.maxRevenueCents,
+        amountCents: tier.amountCents,
+      },
       amountCents: tier.amountCents,
       estimated: true,
+      billingBasis: "PRODUCTS_MINUS_DISCOUNTS",
     };
   }
+
   async generate(period: string) {
+    const defaultPlan = await this.ensureDefaultRevenuePlan();
     const { start, end } = this.periodRange(period);
     const restaurants = await this.restaurants
-      .find({ billingPlanId: { $exists: true }, billingStartAt: { $lte: end } })
+      .find({ blocked: { $ne: true } })
       .populate("billingPlanId")
       .lean();
-    const results = [];
+    const results: Array<Record<string, unknown>> = [];
     for (const restaurant of restaurants) {
       const existing = await this.invoices.exists({
         restaurantId: (restaurant as any)._id,
@@ -727,28 +829,38 @@ export class BillingService {
         });
         continue;
       }
-      const plan = restaurant.billingPlanId as unknown as BillingPlan & {
-        _id: Types.ObjectId;
-      };
-      const count = await this.count(
-        (restaurant as any)._id.toString(),
-        start,
-        end,
-        restaurant.billingStartAt,
-      );
-      const tier = this.tierFor(plan, count);
-      const dueDay = restaurant.billingDueDay ?? plan.dueDay;
-      if (!dueDay) {
-        results.push({
-          restaurantId: (restaurant as any)._id,
-          error: "Vencimento não definido",
-        });
+      const plan = this.isRevenuePlan(restaurant.billingPlanId as any)
+        ? (restaurant.billingPlanId as unknown as BillingPlan & { _id: Types.ObjectId })
+        : (defaultPlan as BillingPlan & { _id: Types.ObjectId });
+      const createdAt = (restaurant as any).createdAt ? new Date((restaurant as any).createdAt) : start;
+      const effectiveStart = restaurant.billingStartAt
+        ? new Date(restaurant.billingStartAt)
+        : createdAt > start
+          ? createdAt
+          : start;
+      if (!restaurant.billingPlanId || !this.isRevenuePlan(restaurant.billingPlanId as any)) {
+        await this.restaurants.updateOne(
+          { _id: (restaurant as any)._id },
+          {
+            $set: {
+              billingPlanId: plan._id,
+              ...(restaurant.billingStartAt ? {} : { billingStartAt: effectiveStart }),
+            },
+          },
+        );
+      }
+      if (effectiveStart > end) {
+        results.push({ restaurantId: (restaurant as any)._id, skipped: true });
         continue;
       }
-      const [year, month] = period.split("-").map(Number);
-      const dueDate = new Date(
-        `${month === 12 ? year + 1 : year}-${String(month === 12 ? 1 : month + 1).padStart(2, "0")}-${String(dueDay).padStart(2, "0")}T23:59:59-03:00`,
+      const basis = await this.billingBasis(
+        (restaurant as any)._id,
+        start,
+        end,
+        effectiveStart,
       );
+      const tier = this.tierForRevenue(plan, basis.revenueCents);
+      const dueDate = this.nextBillingDueDate(period);
       try {
         const invoice = await this.invoices.create({
           restaurantId: (restaurant as any)._id,
@@ -756,36 +868,49 @@ export class BillingService {
           period,
           periodStart: start,
           periodEnd: end,
-          completedOrderCount: count,
+          completedOrderCount: basis.completedOrderCount,
+          revenueCents: basis.revenueCents,
           amountCents: tier.amountCents,
           dueDate,
           pricingSnapshot: {
+            billingModel: "REVENUE_TIERS_V1",
             planName: plan.name,
+            revenueCents: basis.revenueCents,
+            billingBasis: "PRODUCTS_MINUS_DISCOUNTS",
+            excludes: ["DELIVERY_FEE", "WAITER_SERVICE_FEE", "CANCELLED_ORDERS"],
             tier: {
-              minOrders: tier.minOrders,
-              maxOrders: tier.maxOrders,
+              minRevenueCents: tier.minRevenueCents,
+              maxRevenueCents: tier.maxRevenueCents,
               amountCents: tier.amountCents,
             },
-            timezone: "America/Sao_Paulo",
+            deliveryPickupCount: basis.deliveryPickupCount,
+            closedTableCount: basis.closedTableCount,
+            timezone: DEFAULT_BILLING_TIMEZONE,
           },
         });
         results.push({
           restaurantId: (restaurant as any)._id,
           invoiceId: invoice.id,
+          revenueCents: basis.revenueCents,
+          amountCents: tier.amountCents,
           created: true,
         });
-      } catch (e) {
-        if ((e as any).code === 11000)
+      } catch (error) {
+        if ((error as any).code === 11000)
           results.push({
             restaurantId: (restaurant as any)._id,
             alreadyExists: true,
           });
-        else throw e;
+        else throw error;
       }
     }
-    return { period, results };
+    return { period, billingModel: "REVENUE_TIERS_V1", results };
   }
   async listInvoices(page = 1, limit = 20, status?: string) {
+    await this.invoices.updateMany(
+      { status: BillingInvoiceStatus.OPEN, dueDate: { $lt: new Date() } },
+      { $set: { status: BillingInvoiceStatus.OVERDUE } },
+    );
     const filter = status ? { status } : {};
     const [items, total] = await Promise.all([
       this.invoices
@@ -1269,8 +1394,12 @@ export class BillingService {
       .lean();
     if (!restaurant)
       throw new NotFoundException("Estabelecimento não encontrado.");
+    await this.invoices.updateMany(
+      { restaurantId: rid, status: BillingInvoiceStatus.OPEN, dueDate: { $lt: new Date() } },
+      { $set: { status: BillingInvoiceStatus.OVERDUE } },
+    );
     const { start, end } = this.periodRange(period, restaurant.timezone);
-    const [estimate, salesMetrics, invoices] = await Promise.all([
+    const [estimate, salesMetrics, invoices, paymentSettings] = await Promise.all([
       this.estimateRestaurant(restaurantId, period),
       this.metrics.summarize(rid, start, end),
       this.invoices
@@ -1278,8 +1407,9 @@ export class BillingService {
         .sort({ period: -1 })
         .limit(24)
         .lean(),
+      this.settings.findOne({ key: "global" }).select("pixReceiverName pixKey").lean(),
     ]);
-    return { period, salesMetrics, estimate, invoices };
+    return { period, salesMetrics, estimate, invoices, paymentSettings };
   }
   async merchantDashboard(restaurantId: string) {
     const rid = this.objectId(restaurantId);

@@ -43,15 +43,15 @@ class UpdateRestaurantDto extends CreateRestaurantDto {
   @IsOptional() @IsBoolean() blocked?: boolean;
 }
 
-class UpdateSettingsDto { @IsOptional() @IsNumber() @Min(0) minimumOrder?: number; @IsOptional() @IsBoolean() pickupEnabled?: boolean; @IsOptional() @IsBoolean() deliveryEnabled?: boolean; @IsOptional() @IsNumber() @Min(0) preparationMinutes?: number; }
-class UpdateAdminSettingsDto extends UpdateSettingsDto { @IsOptional() @IsBoolean() rappidexEnabled?: boolean; }
+class UpdateSettingsDto { @IsOptional() @IsNumber() @Min(0) minimumOrder?: number; @IsOptional() @IsBoolean() pickupEnabled?: boolean; @IsOptional() @IsBoolean() deliveryEnabled?: boolean; @IsOptional() @IsNumber() @Min(0) preparationMinutes?: number; @IsOptional() @IsNumber() @Min(0) @Max(100) serviceFeePercent?: number; @IsOptional() @IsBoolean() qrOrderingEnabled?: boolean; @IsOptional() @IsBoolean() qrRequireWaiterApproval?: boolean; }
+class UpdateAdminSettingsDto extends UpdateSettingsDto { @IsOptional() @IsBoolean() rappidexEnabled?: boolean; @IsOptional() @IsBoolean() tableServiceEnabled?: boolean; @IsOptional() @IsBoolean() waiterAppEnabled?: boolean; }
 class RappidexIntegrationDto { @IsBoolean() enabled!: boolean; }
 class DeliveryZoneDto { @IsOptional() @IsMongoId() id?: string; @IsEnum(DeliveryCoverageType) coverageType!: DeliveryCoverageType; @IsOptional() @IsString() @MinLength(1) name?: string; @IsNumber() @Min(0) fee!: number; @IsOptional() @IsBoolean() active?: boolean; }
 class PaymentMethodDto { @IsIn(['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD']) method!: string; @IsString() @MinLength(1) name!: string; @IsBoolean() active!: boolean; }
 class BusinessPeriodDto { @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) openTime!: string; @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) closeTime!: string; }
 class BusinessDayDto { @IsInt() @Min(0) @Max(6) dayOfWeek!: number; @IsBoolean() isOpen!: boolean; @IsArray() @ArrayMaxSize(12) @ValidateNested({ each: true }) @Type(() => BusinessPeriodDto) periods!: BusinessPeriodDto[]; }
 class BusinessHoursDto { @IsArray() @ArrayMinSize(7) @ArrayMaxSize(7) @ValidateNested({ each: true }) @Type(() => BusinessDayDto) days!: BusinessDayDto[]; }
-class EmployeeDto { @IsString() @MinLength(1) name!: string; @IsEmail() email!: string; @IsOptional() @IsString() phone?: string; @IsString() @MinLength(8) password!: string; }
+class EmployeeDto { @IsString() @MinLength(1) name!: string; @IsEmail() email!: string; @IsOptional() @IsString() phone?: string; @IsString() @MinLength(8) password!: string; @IsOptional() @IsIn(['WAITER','KITCHEN','CASHIER','MANAGER','OTHER']) employeePosition?: string; @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true }) permissions?: string[]; }
 class OwnerDto extends EmployeeDto { @IsString() @MinLength(10) reportWhatsapp!: string; }
 class UpdateStoreUserDto {
   @IsOptional() @IsString() @MinLength(1) name?: string;
@@ -60,6 +60,8 @@ class UpdateStoreUserDto {
   @IsOptional() @IsString() reportWhatsapp?: string;
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsString() @MinLength(8) password?: string;
+  @IsOptional() @IsIn(['WAITER','KITCHEN','CASHIER','MANAGER','OTHER']) employeePosition?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true }) permissions?: string[];
 }
 class EstablishmentWithOwnerDto { @ValidateNested() @Type(() => CreateRestaurantDto) establishment!: CreateRestaurantDto; @ValidateNested() @Type(() => OwnerDto) owner!: OwnerDto; }
 class OwnerUpdateDto extends UpdateStoreUserDto { @IsString() userId!: string; }

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   Optional,
@@ -49,11 +50,19 @@ export type CheckoutInput = {
   couponCode?: string;
   items: CheckoutItem[];
 };
+export type TableOrderInput = {
+  tableId: string;
+  tableSessionId: string;
+  waiterId?: string;
+  tableName: string;
+  items: CheckoutItem[];
+};
 export const transitions: Record<string, string[]> = {
   PENDING: ["ACCEPTED", "REJECTED", "CANCELLED"],
   ACCEPTED: ["PREPARING", "CANCELLED"],
   PREPARING: ["READY", "CANCELLED"],
-  READY: ["OUT_FOR_DELIVERY", "COMPLETED", "CANCELLED"],
+  READY: ["DELIVERED_TO_TABLE", "OUT_FOR_DELIVERY", "COMPLETED", "CANCELLED"],
+  DELIVERED_TO_TABLE: ["COMPLETED", "CANCELLED"],
   OUT_FOR_DELIVERY: ["COMPLETED", "CANCELLED"],
   COMPLETED: [],
   REJECTED: [],
@@ -61,7 +70,7 @@ export const transitions: Record<string, string[]> = {
 };
 export const orderGroups: Record<string, string[]> = {
   pending: ["PENDING"],
-  in_progress: ["ACCEPTED", "PREPARING", "READY", "OUT_FOR_DELIVERY"],
+  in_progress: ["ACCEPTED", "PREPARING", "READY", "DELIVERED_TO_TABLE", "OUT_FOR_DELIVERY"],
   completed: ["COMPLETED"],
   cancelled: ["REJECTED", "CANCELLED"],
 };
@@ -534,6 +543,68 @@ export class OrdersService {
     }
   }
 
+  async createTableOrder(restaurantId: string, input: TableOrderInput, actorId: string) {
+    const rid = this.objectId(restaurantId, "Estabelecimento inválido.");
+    const tableId = this.objectId(input.tableId, "Mesa inválida.");
+    const tableSessionId = this.objectId(input.tableSessionId, "Comanda inválida.");
+    const actor = this.objectId(actorId, "Responsável inválido.");
+    const waiter = input.waiterId ? this.objectId(input.waiterId, "Garçom inválido.") : actor;
+    const restaurant = await this.restaurants.findById(rid).lean();
+    if (!restaurant || restaurant.blocked) throw new NotFoundException("Estabelecimento não encontrado.");
+    const items = await this.priceItemsForRestaurant(rid, input.items);
+    const subtotalCents = items.reduce(
+      (sum, item) => sum + item.quantity * (item.unitPriceCents + item.addons.reduce((n, addon) => n + addon.priceCents, 0)),
+      0,
+    );
+    let order;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        order = await this.orders.create({
+          restaurantId: rid,
+          orderNumber: this.newOrderNumber(),
+          publicToken: randomBytes(32).toString("base64url"),
+          customerName: input.tableName,
+          phone: "SALAO",
+          fulfillment: "TABLE",
+          tableId,
+          tableSessionId,
+          waiterId: waiter,
+          paymentMethod: "TABLE",
+          needsChange: false,
+          items,
+          subtotal: subtotalCents / 100,
+          subtotalCents,
+          deliveryFee: 0,
+          deliveryFeeCents: 0,
+          customerServiceFeeCents: 0,
+          discount: 0,
+          discountCents: 0,
+          total: subtotalCents / 100,
+          totalCents: subtotalCents,
+          rappidexSyncRequested: false,
+          rappidexSyncAttempts: 0,
+          rappidexReleaseRequested: false,
+          rappidexCancelRequested: false,
+          status: "PENDING",
+          statusHistory: [{ status: "PENDING", changedAt: new Date(), changedBy: actor }],
+        });
+        break;
+      } catch (error) {
+        if ((error as any).code !== 11000 || (error as any).keyPattern?.orderNumber !== 1 || attempt === 4) throw error;
+      }
+    }
+    if (!order) throw new ConflictException("Não foi possível gerar um código único para o pedido.");
+    this.gateway.publishNewOrder(rid.toHexString(), { ...order.toJSON(), restaurantName: restaurant.tradeName || restaurant.name });
+    void this.notifications.notifyNewOrder({
+      restaurantId: rid.toHexString(),
+      restaurantName: restaurant.tradeName || restaurant.name,
+      orderNumber: order.orderNumber,
+      totalCents: order.totalCents,
+      fulfillment: order.fulfillment,
+    }).catch(() => undefined);
+    return order.toObject();
+  }
+
   list(restaurantId: string) {
     const rid = this.objectId(restaurantId, "Estabelecimento inválido.");
     return this.orders
@@ -659,6 +730,15 @@ export class OrdersService {
     if (!order) throw new NotFoundException("Pedido não encontrado.");
     return order;
   }
+  async updateStatusAsEmployee(restaurantId: string, id: string, status: string, actorId: string, reason?: string) {
+    const rid = this.objectId(restaurantId, 'Pedido não encontrado.', true);
+    const oid = this.objectId(id, 'Pedido não encontrado.', true);
+    const order = await this.orders.findOne({ _id: oid, restaurantId: rid }).select('fulfillment').lean();
+    if (!order) throw new NotFoundException('Pedido não encontrado.');
+    if (order.fulfillment === 'TABLE') throw new ForbiddenException('Pedidos de mesa devem ser atualizados pelo módulo Mesas, respeitando as permissões do salão.');
+    return this.updateStatus(restaurantId, id, status, actorId, reason);
+  }
+
   async updateStatus(
     restaurantId: string,
     id: string,
@@ -682,6 +762,12 @@ export class OrdersService {
       throw new ConflictException(
         "Pedidos para retirada não saem para entrega.",
       );
+    if (order.fulfillment === "TABLE" && status === "OUT_FOR_DELIVERY")
+      throw new ConflictException("Pedidos de mesa não saem para entrega.");
+    if (order.fulfillment === "TABLE" && status === "COMPLETED" && order.status !== "DELIVERED_TO_TABLE")
+      throw new ConflictException("Entregue o pedido na mesa antes de concluí-lo.");
+    if (order.fulfillment !== "TABLE" && status === "DELIVERED_TO_TABLE")
+      throw new ConflictException("Este status é exclusivo de pedidos de mesa.");
     const hasRappidexDelivery =
       order.fulfillment === "DELIVERY" && Boolean(order.rappidexDeliveryId);
     const rappidexAssigned = this.rappidex?.isDeliveryAssignedStatus(
@@ -717,6 +803,7 @@ export class OrdersService {
     }
     if (status === "PREPARING") order.preparingAt = now;
     if (status === "READY") order.readyAt = now;
+    if (status === "DELIVERED_TO_TABLE") order.deliveredToTableAt = now;
     if (status === "OUT_FOR_DELIVERY") order.outForDeliveryAt = now;
     if (status === "COMPLETED") {
       order.completedAt = now;
@@ -756,6 +843,14 @@ export class OrdersService {
         status,
       }).catch(() => undefined);
     }
+    if (order.fulfillment === "TABLE" && status === "READY" && order.waiterId) {
+      const tableName = order.customerName || "Mesa";
+      void this.notifications.notifyTableOrderReady({
+        waiterId: order.waiterId.toString(),
+        tableName,
+        orderNumber: order.orderNumber,
+      }).catch(() => undefined);
+    }
     this.rappidex?.handleOrderStatusChange(order._id.toString(), status);
     return order;
   }
@@ -785,6 +880,41 @@ export class OrdersService {
       throw new BadRequestException(
         "O bairro deve ter no máximo 100 caracteres.",
       );
+  }
+  private async priceItemsForRestaurant(rid: Types.ObjectId, inputItems: CheckoutItem[]) {
+    const productIds = inputItems.map(({ productId }) => productId);
+    if (!inputItems.length || productIds.some((id) => !Types.ObjectId.isValid(id)))
+      throw new BadRequestException("Pedido sem produtos válidos.");
+    const products = await this.products.find({
+      _id: { $in: productIds }, restaurantId: rid, available: true, archivedAt: { $exists: false },
+    }).lean();
+    if (products.length !== new Set(productIds).size) throw new BadRequestException("Um ou mais produtos estão indisponíveis.");
+    const categoryIds = [...new Set(products.map((p) => p.categoryId.toString()))].map((id) => new Types.ObjectId(id));
+    if ((await this.categories.countDocuments({ _id: { $in: categoryIds }, restaurantId: rid, archivedAt: { $exists: false }, active: true })) !== categoryIds.length)
+      throw new BadRequestException("Um produto pertence a uma categoria indisponível.");
+    const productById = new Map(products.map((product) => [product._id.toString(), product]));
+    return inputItems.map((item) => {
+      const product = productById.get(item.productId) as any;
+      if (!product || !Number.isInteger(item.quantity) || item.quantity < 1) throw new BadRequestException("Item inválido.");
+      const selections = item.addons ?? this.legacySelections(product, item.addonNames ?? []);
+      const unique = new Set(selections.map((selection) => `${selection.groupId}:${selection.addonId}`));
+      if (unique.size !== selections.length) throw new BadRequestException("Um adicional só pode ser selecionado uma vez.");
+      const selected = selections.map((selection) => {
+        const group = product.addonGroups.find((candidate: any) => candidate._id?.toString() === selection.groupId);
+        const addon = group?.addons.find((candidate: any) => candidate._id?.toString() === selection.addonId);
+        if (!group || !addon) throw new BadRequestException("Adicional inválido ou desatualizado. Atualize o cardápio.");
+        const priceCents = cents(addon.priceCents, addon.price);
+        return { groupId: group._id.toString(), addonId: addon._id.toString(), groupName: group.name, name: addon.name, price: priceCents / 100, priceCents };
+      });
+      for (const group of product.addonGroups as any[]) {
+        const count = selected.filter((addon) => addon.groupId === group._id.toString()).length;
+        const minimum = group.required ? Math.max(1, group.min ?? 1) : (group.min ?? 0);
+        if (count < minimum || count > (group.max ?? 1)) throw new BadRequestException(`Seleção inválida no grupo ${group.name}.`);
+      }
+      const pricedAddons = applyAddonPricing(product.addonGroups as any[], selected);
+      const unitPriceCents = cents(product.promotionalPriceCents, product.promotionalPrice ?? product.price);
+      return { productId: product._id, productName: product.name, unitPrice: unitPriceCents / 100, unitPriceCents, quantity: item.quantity, addons: pricedAddons, observation: item.observation?.trim() };
+    });
   }
   private checkoutResponse(order: any, restaurant: Restaurant) {
     const trackingUrl = `/acompanhar/${encodeURIComponent(order.orderNumber)}?token=${encodeURIComponent(order.publicToken)}`;

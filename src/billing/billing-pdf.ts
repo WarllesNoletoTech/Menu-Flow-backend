@@ -378,7 +378,7 @@ export function renderBillingReportPdf(
       t(
         MARGIN_LEFT + 190,
         y,
-        item.fulfillment === "DELIVERY" ? "Entrega" : "Retirada",
+        item.fulfillment === "DELIVERY" ? "Entrega" : item.fulfillment === "TABLE" ? "Mesa / salão" : "Retirada",
         8,
       );
       tRight(MARGIN_LEFT + 365, y, money(item.orderTotalCents), 8);
@@ -586,7 +586,7 @@ export function renderMerchantSalesReportPdf(report: MerchantSalesReportPdf, log
     { kind: "space", height: 8 },
     { kind: "section", title: "ENTREGA E RETIRADA" },
     { kind: "tableHeader", first: "MODALIDADE", second: "PEDIDOS", third: "FATURAMENTO" },
-    ...report.details.fulfillments.map((item) => ({ kind: "tableRow" as const, first: item.fulfillment === "DELIVERY" ? "Entrega" : "Retirada", second: String(item.orders), third: money(item.salesCents) })),
+    ...report.details.fulfillments.map((item) => ({ kind: "tableRow" as const, first: item.fulfillment === "DELIVERY" ? "Entrega" : item.fulfillment === "TABLE" ? "Mesa / salão" : "Retirada", second: String(item.orders), third: money(item.salesCents) })),
     ...(report.details.fulfillments.length ? [] : [{ kind: "tableRow", first: "Sem dados", second: "-", third: "-" } as SalesPdfLine]),
     { kind: "space", height: 8 },
     { kind: "section", title: "VENDAS POR DIA" },

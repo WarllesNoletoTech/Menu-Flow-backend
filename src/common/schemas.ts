@@ -107,6 +107,9 @@ export class User {
   @Prop() phone?: string;
   @Prop({ match: /^55\d{10,11}$/ }) reportWhatsapp?: string;
   @Prop({ enum: Role, required: true }) role!: Role;
+  @Prop({ enum: ["WAITER", "KITCHEN", "CASHIER", "MANAGER", "OTHER"] })
+  employeePosition?: "WAITER" | "KITCHEN" | "CASHIER" | "MANAGER" | "OTHER";
+  @Prop({ type: [String], default: [] }) permissions!: string[];
   @Prop({ type: Types.ObjectId, ref: "Restaurant" })
   restaurantId?: Types.ObjectId;
   @Prop({ type: [CustomerAddressSchema], default: [] })
@@ -275,7 +278,10 @@ export class Order {
   @Prop({ index: true, sparse: true, unique: true }) idempotencyKey?: string;
   @Prop({ required: true }) customerName!: string;
   @Prop({ required: true }) phone!: string;
-  @Prop({ enum: ["DELIVERY", "PICKUP"], required: true }) fulfillment!: string;
+  @Prop({ enum: ["DELIVERY", "PICKUP", "TABLE"], required: true }) fulfillment!: string;
+  @Prop({ type: Types.ObjectId, ref: "RestaurantTable", index: true }) tableId?: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "TableSession", index: true }) tableSessionId?: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "User", index: true }) waiterId?: Types.ObjectId;
   @Prop({ type: Object }) address?: Record<string, string>;
   @Prop({ required: true }) paymentMethod!: string;
   @Prop({ default: false }) needsChange!: boolean;
@@ -298,6 +304,7 @@ export class Order {
       "ACCEPTED",
       "PREPARING",
       "READY",
+      "DELIVERED_TO_TABLE",
       "OUT_FOR_DELIVERY",
       "COMPLETED",
       "REJECTED",
@@ -316,6 +323,7 @@ export class Order {
   @Prop() acceptedAt?: Date;
   @Prop() preparingAt?: Date;
   @Prop() readyAt?: Date;
+  @Prop() deliveredToTableAt?: Date;
   @Prop() outForDeliveryAt?: Date;
   @Prop() completedAt?: Date;
   @Prop() rejectedAt?: Date;
@@ -350,6 +358,7 @@ OrderSchema.index({ restaurantId: 1, status: 1, completedAt: 1 });
 OrderSchema.index({ restaurantId: 1, status: 1, rejectedAt: 1 });
 OrderSchema.index({ restaurantId: 1, status: 1, cancelledAt: 1 });
 OrderSchema.index({ customerId: 1, createdAt: -1 });
+OrderSchema.index({ restaurantId: 1, tableSessionId: 1, createdAt: 1 });
 OrderSchema.index({ rappidexSyncRequested: 1, rappidexSyncStatus: 1, createdAt: 1 });
 OrderSchema.index({ rappidexReleaseRequested: 1, createdAt: 1 });
 OrderSchema.index({ rappidexCancelRequested: 1, createdAt: 1 });
@@ -648,6 +657,70 @@ export class RestaurantSettings {
   @Prop({ default: false }) deliveryEnabled!: boolean;
   @Prop({ min: 0 }) preparationMinutes?: number;
   @Prop({ default: false }) rappidexEnabled!: boolean;
+  @Prop({ default: false }) tableServiceEnabled!: boolean;
+  @Prop({ default: false }) waiterAppEnabled!: boolean;
+  @Prop({ default: 10, min: 0, max: 100 }) serviceFeePercent!: number;
+  @Prop({ default: false }) qrOrderingEnabled!: boolean;
+  @Prop({ default: true }) qrRequireWaiterApproval!: boolean;
 }
 export const RestaurantSettingsSchema =
   SchemaFactory.createForClass(RestaurantSettings);
+
+@Schema({ timestamps: true })
+export class RestaurantTable {
+  @Prop({ type: Types.ObjectId, ref: "Restaurant", required: true, index: true }) restaurantId!: Types.ObjectId;
+  @Prop({ required: true, min: 1 }) number!: number;
+  @Prop({ required: true, trim: true }) name!: string;
+  @Prop({ min: 1, default: 4 }) capacity!: number;
+  @Prop({ default: true, index: true }) active!: boolean;
+  @Prop({ default: 0 }) sortOrder!: number;
+  @Prop({ required: true, unique: true, index: true, trim: true }) qrToken!: string;
+}
+export const RestaurantTableSchema = SchemaFactory.createForClass(RestaurantTable);
+RestaurantTableSchema.index({ restaurantId: 1, number: 1 }, { unique: true });
+RestaurantTableSchema.index({ restaurantId: 1, sortOrder: 1, number: 1 });
+
+export type TableSessionStatus = "OPEN" | "AWAITING_PAYMENT" | "CLOSED";
+@Schema({ timestamps: true })
+export class TableSession {
+  @Prop({ type: Types.ObjectId, ref: "Restaurant", required: true, index: true }) restaurantId!: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "RestaurantTable", required: true, index: true }) primaryTableId!: Types.ObjectId;
+  @Prop({ type: [{ type: Types.ObjectId, ref: "RestaurantTable" }], default: [] }) tableIds!: Types.ObjectId[];
+  @Prop({ enum: ["OPEN", "AWAITING_PAYMENT", "CLOSED"], default: "OPEN", index: true }) status!: TableSessionStatus;
+  @Prop({ default: true, index: true }) active!: boolean;
+  @Prop({ type: Types.ObjectId, ref: "User", required: true }) openedBy!: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "User", index: true }) waiterId?: Types.ObjectId;
+  @Prop({ trim: true }) customerName?: string;
+  @Prop({ min: 1, default: 1 }) peopleCount!: number;
+  @Prop({ min: 0, default: 0 }) subtotalCents!: number;
+  @Prop({ min: 0, max: 100, default: 10 }) serviceFeePercent!: number;
+  @Prop({ min: 0, default: 0 }) serviceFeeCents!: number;
+  @Prop({ min: 0, default: 0 }) discountCents!: number;
+  @Prop({ min: 0, default: 0 }) totalCents!: number;
+  @Prop({ min: 0, default: 0 }) paidCents!: number;
+  @Prop({ min: 0, default: 0 }) balanceCents!: number;
+  @Prop({ type: [Object], default: [] }) payments!: Array<{ amountCents: number; method: string; recordedBy: Types.ObjectId; recordedAt: Date; note?: string }>;
+  @Prop({ default: Date.now }) openedAt!: Date;
+  @Prop() closedAt?: Date;
+  @Prop({ type: Types.ObjectId, ref: "User" }) closedBy?: Types.ObjectId;
+}
+export const TableSessionSchema = SchemaFactory.createForClass(TableSession);
+TableSessionSchema.index({ restaurantId: 1, status: 1, openedAt: -1 });
+// A mesma mesa não pode pertencer a duas comandas abertas ao mesmo tempo, inclusive em requisições concorrentes.
+TableSessionSchema.index(
+  { restaurantId: 1, tableIds: 1 },
+  { unique: true, partialFilterExpression: { active: true } },
+);
+TableSessionSchema.index({ restaurantId: 1, tableIds: 1, status: 1 });
+
+@Schema({ timestamps: true })
+export class TableEvent {
+  @Prop({ type: Types.ObjectId, ref: "Restaurant", required: true, index: true }) restaurantId!: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "TableSession", required: true, index: true }) tableSessionId!: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "RestaurantTable", index: true }) tableId?: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "User", required: true }) actorId!: Types.ObjectId;
+  @Prop({ required: true, trim: true }) action!: string;
+  @Prop({ type: Object, default: {} }) metadata!: Record<string, unknown>;
+}
+export const TableEventSchema = SchemaFactory.createForClass(TableEvent);
+TableEventSchema.index({ tableSessionId: 1, createdAt: -1 });

@@ -194,7 +194,7 @@ export class NotificationsService implements OnModuleInit {
     const users = await this.notificationRecipients(input.restaurantId);
     const number = this.orderNumber(input.orderNumber);
     const total = (input.totalCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    const service = input.fulfillment === 'DELIVERY' ? 'Entrega' : 'Retirada no local';
+    const service = input.fulfillment === 'DELIVERY' ? 'Entrega' : input.fulfillment === 'TABLE' ? 'Mesa / salão' : 'Retirada no local';
 
     await this.sendToUsers(users, 'newOrder', (user) => ({
       title: user.role === Role.SUPER_ADMIN
@@ -255,6 +255,20 @@ export class NotificationsService implements OnModuleInit {
       url: user.role === Role.SUPER_ADMIN ? '/admin/pedidos' : '/empresa/pedidos',
       kind: 'orderStatus',
     }));
+  }
+
+  async notifyTableOrderReady(input: { waiterId: string; tableName: string; orderNumber?: string }) {
+    if (!Types.ObjectId.isValid(input.waiterId)) return;
+    const waiter = await this.users.findOne({ _id: new Types.ObjectId(input.waiterId), role: Role.EMPLOYEE, active: true, deletedAt: null }).lean();
+    if (!waiter) return;
+    const number = this.orderNumber(input.orderNumber);
+    await this.sendToUsers([waiter], 'orderStatus', () => ({
+      title: `🍽️ ${input.tableName} · pedido pronto`,
+      body: `${number} está pronto para retirada e entrega na mesa.`,
+      tag: `table-ready-${input.orderNumber || Date.now()}`,
+      url: '/funcionario/mesas',
+      kind: 'orderStatus',
+    }), true, false);
   }
 
   private async notificationRecipients(restaurantId: string) {
@@ -449,6 +463,10 @@ export class NotificationsService implements OnModuleInit {
       READY: {
         title: '📦 Pedido pronto',
         body: `${number} está pronto para a próxima etapa.`,
+      },
+      DELIVERED_TO_TABLE: {
+        title: '🍽️ Pedido entregue na mesa',
+        body: `${number} foi entregue no salão.`,
       },
       OUT_FOR_DELIVERY: {
         title: '🛵 Pedido saiu para entrega',

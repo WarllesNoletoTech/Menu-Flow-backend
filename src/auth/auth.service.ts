@@ -30,7 +30,7 @@ export class AuthService implements OnModuleInit {
     this.logger.log('Initial SUPER_ADMIN created from development environment configuration.');
   }
   async bootstrap(name: string, email: string, password: string) { if (this.config.get<string>('NODE_ENV') === 'production') throw new ForbiddenException('Bootstrap is disabled in production. Use the administrative creation script.'); if (await this.users.exists({})) throw new ConflictException('Bootstrap is only available before the first user'); return this.create(name, email, password, Role.SUPER_ADMIN); }
-  async create(name: string, email: string, password: string, role: Role, restaurantId?: string, phone?: string, reportWhatsapp?: string) {
+  async create(name: string, email: string, password: string, role: Role, restaurantId?: string, phone?: string, reportWhatsapp?: string, employeePosition?: string, permissions?: string[]) {
     email = email.trim().toLowerCase();
     const requiresRestaurant = role === Role.RESTAURANT_ADMIN || role === Role.EMPLOYEE;
     const normalizedReportWhatsapp = role === Role.RESTAURANT_ADMIN ? normalizeReportWhatsapp(reportWhatsapp) : undefined;
@@ -44,15 +44,15 @@ export class AuthService implements OnModuleInit {
       throw new ConflictException('Este estabelecimento já possui um lojista responsável.');
     }
     if (await this.users.exists({ email })) throw new ConflictException('Email already exists');
-    const user = await this.users.create({ name, email, phone, reportWhatsapp: normalizedReportWhatsapp, passwordHash: await bcrypt.hash(password, 12), role, restaurantId: normalizedRestaurantId, active: true });
-    return { id: user.id, name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString() };
+    const user = await this.users.create({ name, email, phone, reportWhatsapp: normalizedReportWhatsapp, passwordHash: await bcrypt.hash(password, 12), role, restaurantId: normalizedRestaurantId, active: true, ...(role === Role.EMPLOYEE ? { employeePosition: employeePosition || 'OTHER', permissions: permissions ?? [] } : {}) });
+    return { id: user.id, name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString(), employeePosition: user.employeePosition, permissions: user.permissions ?? [] };
   }
   async registerCustomer(name: string, email: string, password: string, phone: string) { await this.create(name, email, password, Role.CUSTOMER, undefined, phone); return this.login(email, password); }
   async profile(id: string) {
     const user = await this.users.findOne({ _id: id, $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] }).lean();
     if (!user || !user.active) throw new UnauthorizedException('Invalid credentials');
     await this.validateMembership(user.role, user.restaurantId?.toString());
-    return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString() };
+    return { id: user._id.toString(), name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString(), employeePosition: user.employeePosition, permissions: user.permissions ?? [] };
   }
   async updateProfile(id: string, input: { name?: string; phone?: string; reportWhatsapp?: string }) {
     const changes: Record<string, string> = {};
@@ -74,7 +74,7 @@ export class AuthService implements OnModuleInit {
     const accessToken = user.role === Role.CUSTOMER
       ? await this.jwt.signAsync(payload, { expiresIn: customerExpiresIn })
       : await this.jwt.signAsync(payload);
-    return { accessToken, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString() } };
+    return { accessToken, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, reportWhatsapp: user.reportWhatsapp, role: user.role, restaurantId: user.restaurantId?.toString(), employeePosition: user.employeePosition, permissions: user.permissions ?? [] } };
   }
   private async validateMembership(role: Role, restaurantId?: string) { const membership = role === Role.RESTAURANT_ADMIN || role === Role.EMPLOYEE; if (!membership) { if (restaurantId) throw new UnauthorizedException('Invalid credentials'); return; } if (!restaurantId || !Types.ObjectId.isValid(restaurantId) || !(await this.restaurants.exists({ _id: new Types.ObjectId(restaurantId), blocked: false }))) throw new UnauthorizedException('Invalid credentials'); }
 }

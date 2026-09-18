@@ -23,5 +23,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
   ])],
   controllers: [OrdersController, AdminOrdersController, CustomerOrdersController, PublicOrderController, EmployeeOrdersController],
   providers: [OrdersService],
+  exports: [OrdersService],
 })
 export class OrdersModule {}

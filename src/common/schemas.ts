@@ -720,7 +720,7 @@ export class TableSession {
   @Prop({ min: 0, default: 0 }) totalCents!: number;
   @Prop({ min: 0, default: 0 }) paidCents!: number;
   @Prop({ min: 0, default: 0 }) balanceCents!: number;
-  @Prop({ type: [Object], default: [] }) payments!: Array<{ amountCents: number; method: string; recordedBy: Types.ObjectId; recordedAt: Date; note?: string }>;
+  @Prop({ type: [Object], default: [] }) payments!: Array<{ amountCents: number; receivedCents?: number; changeCents?: number; method: string; recordedBy: Types.ObjectId; recordedAt: Date; note?: string }>;
   @Prop({ default: Date.now }) openedAt!: Date;
   @Prop() closedAt?: Date;
   @Prop({ type: Types.ObjectId, ref: "User" }) closedBy?: Types.ObjectId;

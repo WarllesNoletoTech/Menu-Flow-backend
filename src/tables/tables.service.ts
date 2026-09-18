@@ -281,12 +281,28 @@ export class TablesService {
     await this.recalculate(session._id);
     const fresh = await this.sessions.findById(session._id);
     if (!fresh) throw new NotFoundException('Comanda não encontrada.');
-    if (input.amountCents > fresh.balanceCents) throw new BadRequestException('O pagamento não pode ser maior que o saldo pendente.');
-    fresh.payments = [...(fresh.payments ?? []), { amountCents: input.amountCents, method: input.method, recordedBy: this.oid(actor.sub, 'Responsável inválido.'), recordedAt: new Date(), note: input.note?.trim() }];
+    const receivedCents = input.amountCents;
+    const isCash = input.method === 'CASH';
+    if (!isCash && receivedCents > fresh.balanceCents) throw new BadRequestException('O pagamento não pode ser maior que o saldo pendente.');
+    const appliedCents = Math.min(receivedCents, fresh.balanceCents);
+    const changeCents = isCash ? Math.max(0, receivedCents - fresh.balanceCents) : 0;
+    const paymentNote = [
+      input.note?.trim(),
+      changeCents > 0 ? `Recebido ${this.money(receivedCents)} · Troco ${this.money(changeCents)}` : undefined,
+    ].filter(Boolean).join(' · ') || undefined;
+    fresh.payments = [...(fresh.payments ?? []), {
+      amountCents: appliedCents,
+      receivedCents: isCash ? receivedCents : undefined,
+      changeCents: changeCents || undefined,
+      method: input.method,
+      recordedBy: this.oid(actor.sub, 'Responsável inválido.'),
+      recordedAt: new Date(),
+      note: paymentNote,
+    }];
     fresh.paidCents = fresh.payments.reduce((sum, payment) => sum + Number(payment.amountCents || 0), 0);
     fresh.balanceCents = Math.max(0, fresh.totalCents - fresh.paidCents);
     await fresh.save();
-    await this.event(actor, fresh._id, 'PAYMENT_ADDED', fresh.primaryTableId, { amountCents: input.amountCents, method: input.method, balanceCents: fresh.balanceCents });
+    await this.event(actor, fresh._id, 'PAYMENT_ADDED', fresh.primaryTableId, { amountCents: appliedCents, receivedCents: isCash ? receivedCents : undefined, changeCents, method: input.method, balanceCents: fresh.balanceCents });
     return this.session(actor, sessionId);
   }
 

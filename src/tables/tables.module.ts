@@ -4,6 +4,7 @@ import { Order, OrderSchema, RestaurantSettings, RestaurantSettingsSchema, Resta
 import { OrdersModule } from '../orders/orders.module';
 import { PrinterModule } from '../printer/printer.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { CashRegisterModule } from '../cash-register/cash-register.module';
 import { TablesController } from './tables.controller';
 import { TablesService } from './tables.service';
 
@@ -12,6 +13,7 @@ import { TablesService } from './tables.service';
     OrdersModule,
     PrinterModule,
     NotificationsModule,
+    CashRegisterModule,
     MongooseModule.forFeature([
       { name: RestaurantTable.name, schema: RestaurantTableSchema },
       { name: TableSession.name, schema: TableSessionSchema },

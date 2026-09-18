@@ -120,6 +120,21 @@ export class PrinterService {
     return { queued: true, jobId: job._id.toString() };
   }
 
+  async queueCashierTextForActor(actor: PrinterActor, type: string, content: string, payload: Record<string, unknown> = {}) {
+    await this.assertPrint(actor);
+    const rid = this.rid(actor);
+    const setting = await this.settings.findOne({ restaurantId: rid }).lean();
+    if (!setting?.printerEnabled) return { queued: false, reason: 'PRINTER_DISABLED' };
+    const job = await this.createJob({
+      restaurantId: rid,
+      printerRole: 'CASHIER',
+      type,
+      content,
+      payload,
+    });
+    return { queued: true, jobId: job._id.toString() };
+  }
+
   async recent(actor: PrinterActor) {
     await this.assertView(actor);
     return this.jobs.find({ restaurantId: this.rid(actor) }).sort({ createdAt: -1 }).limit(30).select('printerRole type status attempts error createdAt printedAt').lean();

@@ -8,6 +8,7 @@ import { OrdersService, type CheckoutItem } from '../orders/orders.service';
 import type { TablePermission } from './table-permissions';
 import { PrinterService } from '../printer/printer.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CashRegisterService } from '../cash-register/cash-register.service';
 
 export type TableActor = { sub: string; role: Role; restaurantId: string };
 
@@ -23,6 +24,7 @@ export class TablesService {
     private readonly ordersService: OrdersService,
     private readonly printer: PrinterService,
     private readonly notifications: NotificationsService,
+    private readonly cashRegister: CashRegisterService,
   ) {}
 
   async context(actor: TableActor) {
@@ -281,6 +283,7 @@ export class TablesService {
     await this.recalculate(session._id);
     const fresh = await this.sessions.findById(session._id);
     if (!fresh) throw new NotFoundException('Comanda não encontrada.');
+    await this.cashRegister.assertOpen(actor);
     const receivedCents = input.amountCents;
     const isCash = input.method === 'CASH';
     if (!isCash && receivedCents > fresh.balanceCents) throw new BadRequestException('O pagamento não pode ser maior que o saldo pendente.');
@@ -302,6 +305,13 @@ export class TablesService {
     fresh.paidCents = fresh.payments.reduce((sum, payment) => sum + Number(payment.amountCents || 0), 0);
     fresh.balanceCents = Math.max(0, fresh.totalCents - fresh.paidCents);
     await fresh.save();
+    await this.cashRegister.recordSale(actor, {
+      amountCents: appliedCents,
+      method: input.method,
+      sourceId: fresh._id.toString(),
+      sourceKey: `TABLE_PAYMENT:${fresh._id.toString()}:${fresh.payments.length}`,
+      note: `Comanda ${fresh._id.toString().slice(-6).toUpperCase()}${paymentNote ? ` · ${paymentNote}` : ''}`,
+    });
     await this.event(actor, fresh._id, 'PAYMENT_ADDED', fresh.primaryTableId, { amountCents: appliedCents, receivedCents: isCash ? receivedCents : undefined, changeCents, method: input.method, balanceCents: fresh.balanceCents });
     return this.session(actor, sessionId);
   }
@@ -319,6 +329,7 @@ export class TablesService {
     if (activeOrders.length) throw new ConflictException('Ainda existem pedidos em preparo ou aguardando entrega. Entregue os pedidos antes de fechar a mesa.');
 
     if (fresh.balanceCents > 0) {
+      await this.cashRegister.assertOpen(actor);
       const amountCents = fresh.balanceCents;
       if (input.method === 'CASH' && input.receivedCents != null && input.receivedCents < fresh.balanceCents) throw new BadRequestException('O valor recebido em dinheiro é menor que o saldo da conta.');
       const changeCents = input.method === 'CASH' && input.receivedCents ? Math.max(0, input.receivedCents - fresh.balanceCents) : 0;
@@ -332,6 +343,13 @@ export class TablesService {
       fresh.paidCents = fresh.payments.reduce((sum, payment) => sum + Number(payment.amountCents || 0), 0);
       fresh.balanceCents = 0;
       await fresh.save();
+      await this.cashRegister.recordSale(actor, {
+        amountCents,
+        method: input.method,
+        sourceId: fresh._id.toString(),
+        sourceKey: `TABLE_PAYMENT:${fresh._id.toString()}:${fresh.payments.length}`,
+        note: `Fechamento rápido · Comanda ${fresh._id.toString().slice(-6).toUpperCase()}`,
+      });
       await this.event(actor, fresh._id, 'PAYMENT_ADDED', fresh.primaryTableId, { amountCents, method: input.method, balanceCents: 0, quickClose: true });
     }
 

@@ -746,6 +746,50 @@ export class TableEvent {
 export const TableEventSchema = SchemaFactory.createForClass(TableEvent);
 TableEventSchema.index({ tableSessionId: 1, createdAt: -1 });
 
+
+
+export type CashRegisterStatus = "OPEN" | "CLOSED";
+@Schema({ timestamps: true })
+export class CashRegisterShift {
+  @Prop({ type: Types.ObjectId, ref: "Restaurant", required: true, index: true }) restaurantId!: Types.ObjectId;
+  @Prop({ enum: ["OPEN", "CLOSED"], default: "OPEN", index: true }) status!: CashRegisterStatus;
+  @Prop({ type: Types.ObjectId, ref: "User", required: true }) openedBy!: Types.ObjectId;
+  @Prop({ min: 0, default: 0 }) openingAmountCents!: number;
+  @Prop({ default: Date.now }) openedAt!: Date;
+  @Prop({ type: Types.ObjectId, ref: "User" }) closedBy?: Types.ObjectId;
+  @Prop() closedAt?: Date;
+  @Prop({ min: 0 }) declaredCashCents?: number;
+  @Prop({ min: 0 }) expectedCashCents?: number;
+  @Prop({ default: 0 }) differenceCents?: number;
+  @Prop({ trim: true, maxlength: 500 }) note?: string;
+}
+export const CashRegisterShiftSchema = SchemaFactory.createForClass(CashRegisterShift);
+CashRegisterShiftSchema.index({ restaurantId: 1, openedAt: -1 });
+CashRegisterShiftSchema.index(
+  { restaurantId: 1, status: 1 },
+  { unique: true, partialFilterExpression: { status: "OPEN" } },
+);
+
+export type CashMovementType = "OPENING" | "SUPPLY" | "WITHDRAWAL" | "SALE";
+@Schema({ timestamps: true })
+export class CashMovement {
+  @Prop({ type: Types.ObjectId, ref: "Restaurant", required: true, index: true }) restaurantId!: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: "CashRegisterShift", required: true, index: true }) shiftId!: Types.ObjectId;
+  @Prop({ enum: ["OPENING", "SUPPLY", "WITHDRAWAL", "SALE"], required: true, index: true }) type!: CashMovementType;
+  @Prop({ min: 0, required: true }) amountCents!: number;
+  @Prop({ enum: ["PIX", "CASH", "CREDIT_CARD", "DEBIT_CARD"] }) method?: string;
+  @Prop({ type: Types.ObjectId, ref: "User", required: true }) recordedBy!: Types.ObjectId;
+  @Prop({ default: Date.now, index: true }) recordedAt!: Date;
+  @Prop({ trim: true, maxlength: 500 }) note?: string;
+  @Prop({ trim: true, maxlength: 80 }) sourceType?: string;
+  @Prop({ trim: true, maxlength: 160 }) sourceId?: string;
+  @Prop({ trim: true, maxlength: 240 }) sourceKey?: string;
+}
+export const CashMovementSchema = SchemaFactory.createForClass(CashMovement);
+CashMovementSchema.index({ shiftId: 1, recordedAt: -1 });
+CashMovementSchema.index({ restaurantId: 1, recordedAt: -1 });
+CashMovementSchema.index({ sourceKey: 1 }, { unique: true, sparse: true });
+
 export type PrintJobStatus = "PENDING" | "CLAIMED" | "PRINTED" | "FAILED";
 export type PrintJobRole = "KITCHEN" | "CASHIER" | "BAR";
 @Schema({ timestamps: true })

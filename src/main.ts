@@ -5,7 +5,7 @@ import { AppModule } from './app.module';
 import { corsOptions } from './common/cors';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   app.enableCors(corsOptions());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   const config = new DocumentBuilder().setTitle('Menu Flow API').setVersion('1.0').addBearerAuth().build();

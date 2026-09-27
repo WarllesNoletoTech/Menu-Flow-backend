@@ -1,3 +1,4 @@
+import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -34,7 +35,7 @@ function validateEnvironment(environment: Record<string, unknown>) {
 }
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnvironment }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ uri: config.getOrThrow<string>('MONGODB_URI'), serverSelectionTimeoutMS: 10000, retryAttempts: 5, retryDelay: 1000 }) }), AuthModule, EstablishmentTypesModule, HomeBannersModule, RestaurantsModule, CatalogModule, NotificationsModule, OrdersModule, PrinterModule, CashRegisterModule, TablesModule, UsersModule, CustomersModule, LocationsModule, BillingModule],
+  imports: [WhatsappModule, ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnvironment }), ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]), MongooseModule.forRootAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ uri: config.getOrThrow<string>('MONGODB_URI'), serverSelectionTimeoutMS: 10000, retryAttempts: 5, retryDelay: 1000 }) }), AuthModule, EstablishmentTypesModule, HomeBannersModule, RestaurantsModule, CatalogModule, NotificationsModule, OrdersModule, PrinterModule, CashRegisterModule, TablesModule, UsersModule, CustomersModule, LocationsModule, BillingModule],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}
